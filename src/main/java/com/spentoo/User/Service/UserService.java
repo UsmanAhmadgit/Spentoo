@@ -1,7 +1,7 @@
-package com.spentoo.User.Service;
+package com.spentoo.user.service;
 
-import com.spentoo.User.Model.User;
-import com.spentoo.User.Repository.UserRepository;
+import com.spentoo.user.model.User;
+import com.spentoo.user.repository.UserRepository;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
