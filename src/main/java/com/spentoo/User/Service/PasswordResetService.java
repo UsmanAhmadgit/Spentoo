@@ -1,8 +1,8 @@
-package com.spentoo.User.Service;
+package com.spentoo.user.service;
 
-import com.spentoo.User.Model.PasswordResetToken;
-import com.spentoo.User.Model.User;
-import com.spentoo.User.Repository.PasswordResetTokenRepository;
+import com.spentoo.user.model.PasswordResetToken;
+import com.spentoo.user.model.User;
+import com.spentoo.user.repository.PasswordResetTokenRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
