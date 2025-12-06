@@ -1,4 +1,4 @@
-package com.spentoo.User.dto;
+package com.spentoo.user.dto;
 
 public class LoginResponseDTO {
     public String message;

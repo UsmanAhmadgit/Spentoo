@@ -1,13 +1,14 @@
-package com.spentoo.User.Controller;
+package com.spentoo.user.controller;
 
-import com.spentoo.User.dto.*;
-import com.spentoo.User.Model.User;
-import com.spentoo.User.Service.UserService;
-import com.spentoo.User.Service.LoginHistoryService;
+import com.spentoo.user.dto.*;
+import com.spentoo.user.model.User;
+import com.spentoo.user.service.UserService;
+import com.spentoo.user.service.LoginHistoryService;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/user")
+@CrossOrigin(origins = "http://localhost:3000") // allow React frontend
 public class UserController {
 
     private final UserService userService;
@@ -18,6 +19,7 @@ public class UserController {
         this.loginHistoryService = loginHistoryService;
     }
 
+    // Registration endpoint
     @PostMapping("/register")
     public String register(@RequestBody RegisterDTO dto) {
         User user = new User();
@@ -29,7 +31,8 @@ public class UserController {
         return "User registered successfully";
     }
 
-    @PostMapping("/Login")
+    // Login endpoint (lowercase 'login')
+    @PostMapping("/login")
     public LoginResponseDTO login(@RequestBody LoginDTO dto) {
         User user = userService.login(dto.email, dto.password);
         LoginResponseDTO response = new LoginResponseDTO();
@@ -39,8 +42,10 @@ public class UserController {
             return response;
         }
 
+        // Record login history
         loginHistoryService.recordLogin(user, "127.0.0.1", "Chrome");
 
+        // Prepare user DTO
         UserDTO userDTO = new UserDTO();
         userDTO.userID = user.getUserID();
         userDTO.name = user.getName();
