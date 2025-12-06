@@ -1,4 +1,4 @@
-package com.spentoo.user.model;
+package com.spentoo.user.Uodel;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
