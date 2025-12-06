@@ -1,8 +1,8 @@
-package com.spentoo.User.Service;
+package com.spentoo.user.service;
 
-import com.spentoo.User.Model.LoginHistory;
-import com.spentoo.User.Model.User;
-import com.spentoo.User.Repository.LoginHistoryRepository;
+import com.spentoo.user.model.LoginHistory;
+import com.spentoo.user.model.User;
+import com.spentoo.user.repository.LoginHistoryRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
