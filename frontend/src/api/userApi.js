@@ -10,5 +10,14 @@ export const userApi = {
     const response = await axiosClient.post("/user/logout", {});
     return response.data;
   },
+
+  changePassword: async (currentPassword, newPassword, confirmPassword) => {
+    const response = await axiosClient.post("/user/change-password", {
+      currentPassword,
+      newPassword,
+      confirmPassword
+    });
+    return response.data;
+  },
 };
 

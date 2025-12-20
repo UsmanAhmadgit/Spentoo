@@ -1,35 +1,36 @@
 // @ts-nocheck
 // TypeScript errors here are false positives - Create React App uses Babel for JSX transformation
 // The app will build and run correctly despite these IDE warnings
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import { useAuth } from "./hooks/useAuth";
 
-// Auth Pages
+// Auth Pages (eager load - needed immediately)
 import Login from "./pages/Auth/Login";
 import Register from "./pages/Auth/Register";
 import ForgotPassword from "./pages/Auth/ForgotPassword";
 import ResetPassword from "./pages/Auth/ResetPassword";
 
-// Dashboard (TypeScript)
+// Dashboard (TypeScript) - eager load for main entry point
 import Dashboard from "./pages/Dashboard/Dashboard";
-
-// Other Pages
-import Income from "./pages/Income/Income";
-import Categories from "./pages/Categories/Categories";
-import Budget from "./pages/Budget/Budget";
-import ExpensesPage from "./pages/Expenses/ExpensesPage";
-import BillsPage from "./pages/Bills/BillsPage";
-import GoalsPage from "./pages/Savings/GoalsPage";
-import LoansPage from "./pages/Loans/LoansPage";
-import RecurringTransactionsPage from "./pages/Recurring/RecurringTransactionsPage";
+import ChangePassword from "./pages/Dashboard/ChangePassword";
 
 // Layouts
 import AuthLayout from "./layouts/AuthLayout";
 
 // Other Pages
 import NotFound from "./pages/NotFound";
+
+// Other Pages - Lazy load for code splitting
+const Income = lazy(() => import("./pages/Income/Income"));
+const Categories = lazy(() => import("./pages/Categories/Categories"));
+const Budget = lazy(() => import("./pages/Budget/Budget"));
+const ExpensesPage = lazy(() => import("./pages/Expenses/ExpensesPage"));
+const BillsPage = lazy(() => import("./pages/Bills/BillsPage"));
+const GoalsPage = lazy(() => import("./pages/Savings/GoalsPage"));
+const LoansPage = lazy(() => import("./pages/Loans/LoansPage"));
+const RecurringTransactionsPage = lazy(() => import("./pages/Recurring/RecurringTransactionsPage"));
 
 // Protected Route Component
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -67,10 +68,20 @@ const AppRoutes = () => {
         }
       />
       <Route
+        path="/change-password"
+        element={
+          <ProtectedRoute>
+            <ChangePassword />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/income"
         element={
           <ProtectedRoute>
-            <Income />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <Income />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -78,7 +89,9 @@ const AppRoutes = () => {
         path="/categories"
         element={
           <ProtectedRoute>
-            <Categories />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <Categories />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -86,7 +99,9 @@ const AppRoutes = () => {
         path="/budget"
         element={
           <ProtectedRoute>
-            <Budget />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <Budget />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -94,7 +109,9 @@ const AppRoutes = () => {
         path="/expenses"
         element={
           <ProtectedRoute>
-            <ExpensesPage />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <ExpensesPage />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -102,7 +119,9 @@ const AppRoutes = () => {
         path="/bills"
         element={
           <ProtectedRoute>
-            <BillsPage />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <BillsPage />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -110,7 +129,9 @@ const AppRoutes = () => {
         path="/savings"
         element={
           <ProtectedRoute>
-            <GoalsPage />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <GoalsPage />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -118,7 +139,9 @@ const AppRoutes = () => {
         path="/loans"
         element={
           <ProtectedRoute>
-            <LoansPage />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <LoansPage />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -126,7 +149,9 @@ const AppRoutes = () => {
         path="/recurring"
         element={
           <ProtectedRoute>
-            <RecurringTransactionsPage />
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+              <RecurringTransactionsPage />
+            </Suspense>
           </ProtectedRoute>
         }
       />

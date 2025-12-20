@@ -18,7 +18,7 @@ interface NavbarProps {
 
 const Navbar = ({ onMenuClick }: NavbarProps) => {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, userProfile } = useAuth();
 
   const handleLogout = async () => {
     try {
@@ -26,7 +26,6 @@ const Navbar = ({ onMenuClick }: NavbarProps) => {
       await userApi.logout();
     } catch (error) {
       // Even if backend call fails, proceed with frontend logout
-      console.warn('Backend logout failed, but proceeding with frontend logout:', error);
     } finally {
       // Clear authentication state from context and localStorage
       logout();
@@ -35,9 +34,13 @@ const Navbar = ({ onMenuClick }: NavbarProps) => {
     }
   };
 
+  const handleResetPassword = () => {
+    navigate('/change-password');
+  };
+
   return (
     <header className="fixed top-0 left-0 right-0 h-16 gradient-purple z-50 shadow-lg">
-      <div className="flex items-center justify-between h-full px-4">
+      <div className="flex items-center justify-between h-full px-4 relative">
         {/* Left - Menu Button */}
         <Button
           variant="ghost"
@@ -49,12 +52,20 @@ const Navbar = ({ onMenuClick }: NavbarProps) => {
         </Button>
 
         {/* Center - Logo */}
-        <h1 className="text-2xl font-bold text-primary-foreground tracking-wide">
+        <h1 className="absolute left-1/2 transform -translate-x-1/2 text-2xl font-bold text-primary-foreground tracking-wide">
           SPENTOO
         </h1>
 
-        {/* Right - User Dropdown */}
-        <DropdownMenu>
+        {/* Right - User Name Box and Dropdown */}
+        <div className="flex items-center gap-3 ml-auto">
+          {/* User Name Box */}
+          {(userProfile?.firstName || userProfile?.lastName) && (
+            <div className="px-4 py-1.5 rounded-lg bg-primary-foreground/20 text-primary-foreground font-medium text-sm">
+              {userProfile.firstName || ''} {userProfile.lastName || ''}
+            </div>
+          )}
+
+          <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -69,7 +80,10 @@ const Navbar = ({ onMenuClick }: NavbarProps) => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem className="cursor-pointer">
+            <DropdownMenuItem 
+              className="cursor-pointer"
+              onClick={handleResetPassword}
+            >
               <KeyRound className="mr-2 h-4 w-4" />
               Reset Password
             </DropdownMenuItem>
@@ -82,6 +96,7 @@ const Navbar = ({ onMenuClick }: NavbarProps) => {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
     </header>
   );

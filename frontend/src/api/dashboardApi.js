@@ -3,6 +3,7 @@ import { incomeApi } from "./incomeApi";
 import { expenseApi } from "./expenseApi";
 import { loanApi } from "./loanApi";
 import { billApi } from "./billApi";
+import { savingsApi } from "./savingsApi";
 import { categoryApi } from "./categoryApi";
 
 export const dashboardApi = {
@@ -198,10 +199,13 @@ export const dashboardApi = {
       ];
 
       currentMonthExpenses.forEach(exp => {
-        const categoryId = exp.categoryId || exp.category?.id;
-        const category = categoryArray.find(c => (c.id || c.categoryId) === categoryId);
-        const categoryName = category?.name || 'Unknown';
-        const amount = Number(exp.amount) || 0;
+        // Normalize category id from different possible payload shapes
+        const categoryId = exp.categoryId || exp.category?.categoryId || exp.category?.id || exp.categoryId;
+
+        // Normalize category object fields (backend uses categoryId and categoryName)
+        const category = categoryArray.find(c => (c.categoryId || c.id) === categoryId) || categoryArray.find(c => (c.id || c.categoryId) === (exp.category?.id || exp.category?.categoryId));
+        const categoryName = category?.categoryName || category?.name || exp.category?.categoryName || exp.category?.name || 'Unknown';
+        const amount = Number(exp.amount) || Number(exp.total) || 0;
 
         if (categoryMap.has(categoryName)) {
           categoryMap.set(categoryName, categoryMap.get(categoryName) + amount);
@@ -210,13 +214,31 @@ export const dashboardApi = {
         }
       });
 
-      // Convert to array format
+      // Convert to array format and try to use category color when available
       let colorIndex = 0;
-      const breakdown = Array.from(categoryMap.entries()).map(([category, amount]) => ({
-        category,
-        amount,
-        color: colors[colorIndex++ % colors.length],
-      }));
+      
+      const breakdown = Array.from(categoryMap.entries())
+        .map(([categoryName, amount]) => {
+          const matchedCategory = categoryArray.find(c => (c.categoryName || c.name) === categoryName);
+          const color = matchedCategory?.color || matchedCategory?.colour || colors[colorIndex++ % colors.length];
+          return {
+            category: categoryName,
+            amount,
+            color,
+            isSystemGenerated: matchedCategory?.isSystemGenerated || matchedCategory?.systemGenerated || false,
+          };
+        })
+        .filter(item => {
+          // Primary filter: Check isSystemGenerated flag
+          if (item.isSystemGenerated === true) {
+            return false;
+          }
+          // Fallback: Only filter exact match of "Recurring Payments" (the known system-generated category)
+          // Use exact match to avoid filtering legitimate user categories
+          const categoryNameLower = (item.category || '').trim().toLowerCase();
+          const exactSystemGeneratedName = 'recurring payments';
+          return categoryNameLower !== exactSystemGeneratedName;
+        }); // Filter out system-generated categories
 
       return breakdown;
     } catch (error) {
@@ -229,15 +251,21 @@ export const dashboardApi = {
   getUpcomingTransactions: async () => {
     try {
       const response = await axiosClient.get("/recurring-transactions/upcoming");
+      console.log("Upcoming transactions from API:", response.data);
       return response.data;
     } catch (error) {
+      console.warn("Error fetching /recurring-transactions/upcoming:", error.message);
       // If endpoint doesn't exist, try to get all and filter
       try {
         const recurring = await axiosClient.get("/recurring-transactions");
         const recurringArray = Array.isArray(recurring.data) ? recurring.data : [];
-        // Filter for upcoming transactions (you may need to adjust this logic)
-        return recurringArray.filter(t => t.isActive !== false).slice(0, 5);
+        console.log("Recurring transactions fallback:", recurringArray);
+        // Filter for upcoming transactions and add next run date
+        const upcoming = recurringArray.filter(t => t.isActive !== false).slice(0, 5);
+        console.log("Filtered upcoming:", upcoming);
+        return upcoming;
       } catch (err) {
+        console.error("Error fetching recurring transactions:", err);
         return [];
       }
     }
@@ -270,6 +298,24 @@ export const dashboardApi = {
         })
         .slice(0, 3);
     } catch (error) {
+      return [];
+    }
+  },
+
+  // Get active saving goals
+  getActiveGoals: async () => {
+    try {
+      const goals = await savingsApi.getAll();
+      const goalsArray = Array.isArray(goals) ? goals : goals.goals || [];
+      // Filter active goals (status is ACTIVE) and get first 3
+      return goalsArray
+        .filter(goal => {
+          const status = goal.status?.toUpperCase() || goal.status || '';
+          return status === 'ACTIVE';
+        })
+        .slice(0, 3);
+    } catch (error) {
+      console.error('Error fetching active goals:', error);
       return [];
     }
   },

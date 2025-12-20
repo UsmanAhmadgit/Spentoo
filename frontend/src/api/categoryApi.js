@@ -1,14 +1,37 @@
 import axiosClient from "./axiosClient";
+import { withCache, apiCache } from "../utils/apiCache";
+
+// Cache categories for 30 minutes (static data)
+const CACHE_TTL = 30 * 60 * 1000;
+
+const getAllCategories = async () => {
+  const response = await axiosClient.get("/categories");
+  return response.data;
+};
+
+const getCategoriesByType = async (type) => {
+  const response = await axiosClient.get(`/categories?type=${type}`);
+  return response.data;
+};
 
 export const categoryApi = {
-  getAll: async () => {
-    const response = await axiosClient.get("/categories");
-    return response.data;
-  },
+  getAll: withCache(
+    getAllCategories,
+    () => 'categories_all',
+    CACHE_TTL
+  ),
 
-  getByType: async (type) => {
-    const response = await axiosClient.get(`/categories?type=${type}`);
-    return response.data;
+  getByType: withCache(
+    getCategoriesByType,
+    (type) => `categories_type_${type}`,
+    CACHE_TTL
+  ),
+  
+  // Invalidate cache when categories are modified
+  invalidateCache: () => {
+    // Invalidate all category-related cache entries
+    // This will match keys like 'categories_all', 'categories_type_EXPENSE', etc.
+    apiCache.invalidate('categories');
   },
 
   getById: async (id) => {
@@ -33,13 +56,6 @@ export const categoryApi = {
 
   restore: async (id) => {
     const response = await axiosClient.put(`/categories/${id}/restore`, {});
-    return response.data;
-  },
-
-  export: async () => {
-    const response = await axiosClient.get("/categories/export", {
-      responseType: 'blob'
-    });
     return response.data;
   },
 };

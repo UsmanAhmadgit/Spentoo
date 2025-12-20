@@ -71,22 +71,30 @@ const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Toolti
 interface LegendPayload {
   value: string;
   color: string;
+  payload?: { amount?: number; percent?: number };
 }
 
 const CustomLegend = ({ payload }: { payload?: LegendPayload[] }) => {
   if (!payload) return null;
   
   return (
-    <div className="flex flex-wrap justify-center gap-4 mt-4">
-      {payload.map((entry, index) => (
-        <div key={`legend-${index}`} className="flex items-center gap-2">
-          <div
-            className="w-3 h-3 rounded-full"
-            style={{ backgroundColor: entry.color }}
-          />
-          <span className="text-sm text-muted-foreground">{entry.value}</span>
-        </div>
-      ))}
+    <div className="flex flex-wrap justify-center gap-3 mt-4 px-2 max-w-full overflow-hidden">
+      {payload.map((entry, index) => {
+        const amount = entry?.payload?.amount ?? 0;
+        const percent = entry?.payload?.percent ?? 0;
+        return (
+          <div key={`legend-${index}`} className="flex items-center gap-2 flex-shrink-0">
+            <div
+              className="w-3 h-3 rounded-full flex-shrink-0"
+              style={{ backgroundColor: entry.color }}
+            />
+            <div className="text-sm text-muted-foreground min-w-0">
+              <div className="font-medium truncate">{entry.value}</div>
+              <div className="text-xs text-gray-500 whitespace-nowrap">{formatCurrency(amount)} • {Number(percent).toFixed(0)}%</div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -100,7 +108,30 @@ const PieChartCard = () => {
       try {
         setLoading(true);
         const breakdown = await dashboardApi.getCategoryBreakdown();
-        setData(Array.isArray(breakdown) ? breakdown : breakdown.data || []);
+        // Normalize response formats: could be an array or an object with different property names
+        let arr: CategoryData[] = [];
+        if (Array.isArray(breakdown)) {
+          arr = breakdown;
+        } else if (breakdown) {
+          arr = breakdown.data || breakdown.breakdown || breakdown.categories || breakdown.items || [];
+          arr = Array.isArray(arr) ? arr : [];
+        }
+        
+        // Filter out system-generated categories
+        // Primary: Use isSystemGenerated flag
+        // Fallback: Only filter exact match of known system-generated category name
+        const filteredData = arr.filter((item: any) => {
+          // Primary filter: Check isSystemGenerated flag
+          if (item.isSystemGenerated === true) {
+            return false;
+          }
+          // Fallback: Only filter exact match of "Recurring Payments" (the known system-generated category)
+          // Use exact match to avoid filtering legitimate user categories
+          const categoryName = (item.category || item.name || '').trim().toLowerCase();
+          const exactSystemGeneratedName = 'recurring payments';
+          return categoryName !== exactSystemGeneratedName;
+        });
+        setData(filteredData);
       } catch (error) {
         console.error('Error fetching category breakdown:', error);
         setData([]);
@@ -117,11 +148,11 @@ const PieChartCard = () => {
 
   const dataWithPercent = processedData.map((item) => ({
     ...item,
-    percent: (item.amount / total) * 100,
+    percent: total > 0 ? (item.amount / total) * 100 : 0,
   }));
 
   return (
-    <div className="bg-card p-5 rounded-xl shadow-sm hover:shadow-lg transition-all duration-300 hover:-translate-y-1">
+    <div className="bg-card p-5 rounded-xl shadow-sm hover:shadow-lg transition-all duration-300 hover:-translate-y-1 overflow-hidden">
       <h2 className="text-lg font-semibold text-card-foreground mb-4">
         Category Breakdown
       </h2>
@@ -134,26 +165,28 @@ const PieChartCard = () => {
           <p className="text-muted-foreground">No data to display</p>
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={320}>
-          <RechartsPieChart>
-            <Pie
-              data={dataWithPercent}
-              dataKey="amount"
-              nameKey="category"
-              cx="50%"
-              cy="45%"
-              outerRadius={90}
-              label={(entry) => `${entry.percent.toFixed(0)}%`}
-              labelLine={true}
-            >
-              {dataWithPercent.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.color} />
-              ))}
-            </Pie>
-            <Tooltip content={<CustomTooltip />} />
-            <Legend content={<CustomLegend />} verticalAlign="bottom" height={60} />
-          </RechartsPieChart>
-        </ResponsiveContainer>
+        <div className="w-full overflow-hidden">
+          <ResponsiveContainer width="100%" height={400}>
+            <RechartsPieChart>
+              <Pie
+                data={dataWithPercent}
+                dataKey="amount"
+                nameKey="category"
+                cx="50%"
+                cy="40%"
+                outerRadius={80}
+                label={(entry) => `${entry.percent.toFixed(0)}%`}
+                labelLine={false}
+              >
+                {dataWithPercent.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip content={<CustomTooltip />} />
+              <Legend content={<CustomLegend />} verticalAlign="bottom" height={120} />
+            </RechartsPieChart>
+          </ResponsiveContainer>
+        </div>
       )}
     </div>
   );

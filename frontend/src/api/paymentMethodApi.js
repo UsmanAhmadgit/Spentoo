@@ -1,9 +1,24 @@
 import axiosClient from "./axiosClient";
+import { withCache, apiCache } from "../utils/apiCache";
+
+// Cache payment methods for 30 minutes (static data)
+const CACHE_TTL = 30 * 60 * 1000;
+
+const getAllPaymentMethods = async () => {
+  const response = await axiosClient.get("/payment-methods");
+  return response.data;
+};
 
 export const paymentMethodApi = {
-  getAll: async () => {
-    const response = await axiosClient.get("/payment-methods");
-    return response.data;
+  getAll: withCache(
+    getAllPaymentMethods,
+    () => 'payment_methods_all',
+    CACHE_TTL
+  ),
+  
+  // Invalidate cache when payment methods are modified
+  invalidateCache: () => {
+    apiCache.invalidate('payment_methods');
   },
 
   getAllIncludingInactive: async () => {

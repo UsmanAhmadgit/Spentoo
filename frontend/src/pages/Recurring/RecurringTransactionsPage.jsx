@@ -118,7 +118,7 @@ const Badge = ({ children, type, className = '' }) => {
 };
 
 // --- RecurringRow Component ---
-const RecurringRow = ({ recurring, onEdit, onDelete, onPauseResume, onRunNow }) => {
+const RecurringRow = ({ recurring, onEdit, onDelete, onPauseResume }) => {
   // Normalize ID: backend uses recurringId, frontend may expect id
   const transactionId = recurring.recurringId || recurring.id;
   
@@ -126,9 +126,6 @@ const RecurringRow = ({ recurring, onEdit, onDelete, onPauseResume, onRunNow }) 
   const isPaused = !recurring.autoPay;
   
   const { totalMonthly, approximate } = computeMonthlyTotal(recurring.amount, recurring.frequency);
-  
-  // Show Run Now button when not on autoPay
-  const showRunNow = !recurring.autoPay;
   
   // Check if next run date is in the past (only relevant if autoPay=false)
   const nextRunDate = new Date(recurring.nextRunDate);
@@ -208,20 +205,9 @@ const RecurringRow = ({ recurring, onEdit, onDelete, onPauseResume, onRunNow }) 
               {isPaused ? 'Resume' : 'Pause'}
             </button>
             
-            {/* Run Now (Visible only when Paused) */}
-            {showRunNow && (
-              <button
-                onClick={() => onRunNow(transactionId)}
-                className="text-xs font-medium bg-[#1E88E5] text-white hover:bg-blue-700 px-3 py-1 rounded-md transition"
-                aria-label="Run Transaction Now"
-              >
-                Run Now
-              </button>
-            )}
-            
             {/* Delete */}
             <button
-              onClick={() => onDelete(transactionId)}
+              onClick={() => onDelete(recurring)}
               className="text-xs font-medium text-[#E53935] hover:text-red-800 px-2 py-1 transition"
               aria-label="Delete Recurring Transaction"
             >
@@ -367,7 +353,6 @@ const RecurringFormModal = ({ isOpen, onClose, onSave, initialData }) => {
       onSave(result); // Trigger list refresh
       onClose();
     } catch (error) {
-      console.error('Error saving recurring transaction:', error);
       const message = error?.response?.data?.message || 
                      error?.response?.data?.error || 
                      error?.message || 
@@ -477,24 +462,17 @@ const RecurringFormModal = ({ isOpen, onClose, onSave, initialData }) => {
 
             {/* Type, Frequency, Next Run Date */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Type Toggle */}
+              {/* Type - Fixed to EXPENSE only */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Type *</label>
                 <div className="flex rounded-lg bg-gray-100 p-1 border border-gray-300">
-                  {['EXPENSE', 'INCOME'].map(type => (
-                    <button
-                      type="button"
-                      key={type}
-                      onClick={() => setFormData(prev => ({ ...prev, type }))}
-                      className={`flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition ${
-                        formData.type === type 
-                          ? 'bg-[#7E57C2] text-white shadow' 
-                          : 'text-gray-700 hover:bg-white'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
+                  <button
+                    type="button"
+                    className="flex-1 px-3 py-1.5 text-sm font-medium rounded-md bg-[#7E57C2] text-white shadow cursor-default"
+                    disabled
+                  >
+                    EXPENSE
+                  </button>
                 </div>
               </div>
               
@@ -591,6 +569,7 @@ const RecurringTransactionsPage = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [toast, setToast] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { recurringId: number, description: string }
   const [pageError, setPageError] = useState(null);
 
   // Sidebar state
@@ -636,7 +615,6 @@ const RecurringTransactionsPage = () => {
       const data = await recurringApi.getAll();
       setRecurrings(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error('Error fetching recurring transactions:', error);
       const errorMessage = error?.response?.data?.message || 
                           error?.response?.data?.error || 
                           error?.message || 
@@ -661,47 +639,54 @@ const RecurringTransactionsPage = () => {
     setEditItem(null);
   }, [fetchRecurrings, showToast, editItem]);
 
-  const handleDelete = useCallback(async (id) => {
+  // Handle delete click - show confirmation modal
+  const handleDeleteClick = useCallback((recurring) => {
+    const description = recurring.description || recurring.categoryName || 'this transaction';
+    setDeleteConfirm({
+      recurringId: recurring.recurringId || recurring.id,
+      description: description
+    });
+  }, []);
+
+  // Handle confirmed delete
+  const handleDelete = useCallback(async (recurringId) => {
     // Optimistic delete
     const originalRecurrings = recurrings;
-    setRecurrings(prev => prev.filter(r => (r.recurringId !== id && r.id !== id)));
+    setRecurrings(prev => prev.filter(r => (r.recurringId !== recurringId && r.id !== recurringId)));
+    setDeleteConfirm(null); // Close confirmation dialog
     
     try {
-      await recurringApi.delete(id);
-      showToast('Transaction deleted.', 'success');
+      await recurringApi.delete(recurringId);
+      showToast('Transaction deleted successfully.', 'success');
     } catch (error) {
       setRecurrings(originalRecurrings); // Rollback
-      showToast(`Delete failed: ${error?.response?.data?.message || error?.message || 'Error'}`, 'error');
+      const errorMessage = error?.response?.data?.message || error?.message || 'Error';
+      showToast(`Failed to delete transaction: ${errorMessage}`, 'error');
     }
   }, [recurrings, showToast]);
+
+  // Cancel delete confirmation
+  const handleCancelDelete = useCallback(() => {
+    setDeleteConfirm(null);
+  }, []);
 
   const handlePauseResume = useCallback(async (id, action) => {
     try {
       if (action === 'pause') {
         await recurringApi.pause(id);
+        await fetchRecurrings();
+        showToast('Transaction paused successfully.', 'success');
       } else {
+        // Resume also triggers the transaction immediately
         await recurringApi.resume(id);
+        await fetchRecurrings();
+        showToast('Transaction resumed and run successfully!', 'success');
       }
-      await fetchRecurrings();
-      showToast(`Transaction ${action}d successfully.`, 'success');
     } catch (error) {
       showToast(`Failed to ${action}: ${error?.response?.data?.message || error?.message || 'Error'}`, 'error');
     }
   }, [fetchRecurrings, showToast]);
 
-  const handleRunNow = useCallback(async (id) => {
-    if (!window.confirm('Are you sure you want to trigger this transaction now?')) {
-      return;
-    }
-    
-    try {
-      await recurringApi.triggerNow(id);
-      await fetchRecurrings();
-      showToast('Transaction run successfully!', 'success');
-    } catch (error) {
-      showToast(`Failed to run transaction: ${error?.response?.data?.message || error?.message || 'Error'}`, 'error');
-    }
-  }, [fetchRecurrings, showToast]);
 
   // --- Render Logic ---
   let content;
@@ -747,13 +732,12 @@ const RecurringTransactionsPage = () => {
       <div className="space-y-4 mt-6 max-w-5xl mx-auto">
         <p className="text-sm text-gray-500">Note: All recurring transactions use the system 'Recurring Payments' category.</p>
         {sortedRecurrings.map(r => (
-          <RecurringRow 
+          <RecurringRow
             key={r.id || r.recurringId} 
             recurring={r} 
             onEdit={(item) => { setEditItem(item); setModalOpen(true); }}
-            onDelete={handleDelete}
+            onDelete={handleDeleteClick}
             onPauseResume={handlePauseResume}
-            onRunNow={handleRunNow}
           />
         ))}
       </div>
@@ -799,6 +783,47 @@ const RecurringTransactionsPage = () => {
           
           {/* Toast Notification */}
           {toast && <Toast message={toast.message} type={toast.type} />}
+
+          {/* Delete Confirmation Modal */}
+          {deleteConfirm && (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                 role="dialog" aria-modal="true" aria-label="Confirm Delete"
+                 onClick={handleCancelDelete}
+            >
+              <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                   onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                    <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900">Delete Transaction</h3>
+                </div>
+                
+                <p className="text-gray-600 mb-6">
+                  Are you sure you want to delete <span className="font-semibold text-gray-900">"{deleteConfirm.description}"</span>? 
+                  This action cannot be undone.
+                </p>
+                
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={handleCancelDelete}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleDelete(deleteConfirm.recurringId)}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Modal */}
           <RecurringFormModal

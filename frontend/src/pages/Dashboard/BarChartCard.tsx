@@ -85,6 +85,8 @@ const BarChartCard = () => {
               axisLine={{ stroke: 'hsl(var(--border))' }}
             />
             <YAxis
+              domain={[0, 200000]}
+              ticks={[0, 50000, 100000, 150000, 200000]}
               tickFormatter={(value) => formatCurrency(value)}
               className="text-muted-foreground"
               tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}

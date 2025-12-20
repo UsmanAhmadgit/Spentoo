@@ -49,6 +49,7 @@ const Budget = () => {
   // Toast notification state
   const [toastMessage, setToastMessage] = useState(null);
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { budgetId: number, categoryName: string }
 
   // Fetch all budgets on page load
   const fetchBudgets = async () => {
@@ -56,17 +57,11 @@ const Budget = () => {
       const response = await budgetApi.getAll();
       const budgetsList = Array.isArray(response) ? response : [];
       
-      // Transform backend response to frontend format
-      console.log('=== FETCHING BUDGETS ===');
-      console.log('Raw budgets response:', budgetsList);
-      
       const transformedBudgets = budgetsList.map(budget => {
-        // Category is required for all budgets
         const categoryObj = budget.category;
         
         if (!categoryObj) {
-          console.warn('Budget missing category:', budget);
-          return null; // Skip budgets without category (shouldn't happen with new backend)
+          return null;
         }
         
         const categoryId = categoryObj.categoryId || categoryObj.id || null;
@@ -90,17 +85,7 @@ const Budget = () => {
           }
         }
         
-        // A category is a subcategory if it has a parentCategoryId set (not null, not undefined, and not 0)
         const isSubcategory = parentCategoryId !== null && parentCategoryId !== undefined && parentCategoryId !== 0;
-        
-        // Comprehensive debug logging for ALL budgets
-        console.log(`Budget ID ${budget.budgetId || budget.id} - Category: "${categoryName}" (ID: ${categoryId})`, {
-          categoryObj: categoryObj,
-          parentCategoryId: parentCategoryId,
-          isSubcategory: isSubcategory,
-          'categoryObj.parentCategoryId': categoryObj.parentCategoryId,
-          'categoryObj.parentCategory': categoryObj.parentCategory
-        });
         
         // Find parent category name if it's a subcategory
         let parentCategoryName = null;
@@ -135,17 +120,12 @@ const Budget = () => {
       const categoryBudgets = transformedBudgets.filter(b => !b.isSubcategory && b.categoryId);
       const subcategoryBudgets = transformedBudgets.filter(b => b.isSubcategory);
       
-      console.log('=== BUDGET CLASSIFICATION ===');
-      console.log('Total budgets:', transformedBudgets.length);
-      console.log('Category budgets:', categoryBudgets.map(b => `${b.categoryName} (ID: ${b.categoryId}, isSub: ${b.isSubcategory})`));
-      console.log('Subcategory budgets:', subcategoryBudgets.map(b => `${b.categoryName} (ID: ${b.categoryId}, parent: ${b.parentCategoryId}, isSub: ${b.isSubcategory})`));
       
       setBudgets({
         categoryBudgets: categoryBudgets,
         subcategoryBudgets: subcategoryBudgets
       });
-    } catch (error) {
-      console.error('Error fetching budgets:', error);
+      } catch (error) {
       setBudgets({ categoryBudgets: [], subcategoryBudgets: [] });
     }
   };
@@ -165,34 +145,25 @@ const Budget = () => {
       const response = await categoryApi.getAll();
       const categoriesData = Array.isArray(response) ? response : response.categories || [];
       
-      // Filter only budgetable categories
-      const budgetableCategories = categoriesData.filter(cat => 
-        cat.isBudgetable !== false && cat.active !== false && cat.isActive !== false
+      // Filter only active categories
+      const activeCategories = categoriesData.filter(cat => 
+        cat.isActive !== false && cat.active !== false
       );
       
       // Store flat list of all categories for subcategory selection
-      const flatCategories = budgetableCategories.map(cat => ({
+      const flatCategories = activeCategories.map(cat => ({
         categoryId: cat.categoryId || cat.id,
         name: cat.categoryName || cat.name,
-        parentCategoryId: cat.parentCategoryId || cat.parentId || null
+        parentCategoryId: cat.parentCategoryId || cat.parentId || null,
+        isBudgetable: cat.isBudgetable !== false
       }));
       setAllCategories(flatCategories);
       
-      // Transform categories to include subcategories structure (for category dropdown)
-      const categoriesWithSubs = budgetableCategories.map(cat => ({
-        categoryId: cat.categoryId || cat.id,
-        name: cat.categoryName || cat.name,
-        subcategories: budgetableCategories
-          .filter(sub => (sub.parentCategoryId || sub.parentId) === (cat.categoryId || cat.id))
-          .map(sub => ({
-            subcategoryId: sub.categoryId || sub.id,
-            name: sub.categoryName || sub.name
-          }))
-      }));
+      // Get only parent categories (parentCategoryId is null) for the category dropdown
+      const parentCategoriesOnly = flatCategories.filter(cat => !cat.parentCategoryId || cat.parentCategoryId === null);
       
-      setCategories(categoriesWithSubs);
-    } catch (error) {
-      console.error('Error fetching categories:', error);
+      setCategories(parentCategoriesOnly);
+      } catch (error) {
       setCategories([]);
       setAllCategories([]);
     }
@@ -233,19 +204,17 @@ const Budget = () => {
     setFormData(newFormData);
     
     if (newFormData.budgetType === 'subcategory' && categoryId) {
-      // For subcategory budgets, show all categories except the selected parent category
-      // (since any category can be a subcategory of another category)
+      // For subcategory budgets, show only children of the selected parent category
       const availableSubcategories = allCategories
-        .filter(cat => cat.categoryId !== parseInt(categoryId))
+        .filter(cat => cat.parentCategoryId === parseInt(categoryId))
         .map(cat => ({
           subcategoryId: cat.categoryId,
           name: cat.name
         }));
       setSubcategories(availableSubcategories);
-    } else {
-      // For category budgets, show direct subcategories only (legacy behavior)
-    const selectedCategory = categories.find(c => c.categoryId === parseInt(categoryId));
-    setSubcategories(selectedCategory?.subcategories || []);
+    } else if (newFormData.budgetType === 'category') {
+      // For category budgets, don't show any subcategories dropdown
+      setSubcategories([]);
     }
   };
 
@@ -290,34 +259,21 @@ const Budget = () => {
     // Set subcategories based on budget type
     if (budgetType === 'subcategory') {
       if (parentCategoryId) {
-        // Show all categories except the parent
+        // Show only children of the selected parent category
         const availableSubcategories = allCategories
-          .filter(cat => cat.categoryId !== parseInt(parentCategoryId))
+          .filter(cat => cat.parentCategoryId === parseInt(parentCategoryId))
           .map(cat => ({
             subcategoryId: cat.categoryId,
             name: cat.name
           }));
         setSubcategories(availableSubcategories);
       } else {
-        // If no parent found, show all categories
-        const availableSubcategories = allCategories.map(cat => ({
-          subcategoryId: cat.categoryId,
-          name: cat.name
-        }));
-        setSubcategories(availableSubcategories);
+        // If no parent found, show empty list
+        setSubcategories([]);
       }
     } else {
-      // For category budgets, show direct subcategories (legacy behavior, but can also show all)
-      const selectedCategory = categories.find(c => c.categoryId === budget.categoryId);
-      // For subcategory budget creation, we want all categories available
-      // So we'll show all categories except the selected one
-      const availableSubcategories = allCategories
-        .filter(cat => cat.categoryId !== parseInt(budget.categoryId))
-        .map(cat => ({
-          subcategoryId: cat.categoryId,
-          name: cat.name
-        }));
-      setSubcategories(availableSubcategories);
+      // For category budgets, don't show subcategories dropdown
+      setSubcategories([]);
     }
     
     setErrors({});
@@ -373,30 +329,18 @@ const Budget = () => {
         ? parseInt(formData.subcategoryId) 
         : parseInt(formData.categoryId);
       
-      // For subcategory budgets, ALWAYS ensure the category has the correct parentCategoryId
+      // For subcategory budgets, ensure the category has the correct parentCategoryId
       if (formData.budgetType === 'subcategory') {
         const parentCategoryId = parseInt(formData.categoryId);
         const subcategoryId = parseInt(formData.subcategoryId);
         
-        console.log('Creating subcategory budget - updating category:', {
-          subcategoryId: subcategoryId,
-          parentCategoryId: parentCategoryId,
-          'Current category in allCategories': allCategories.find(c => c.categoryId === subcategoryId)
-        });
-        
-        // Always update the category to set the parentCategoryId (even if it might already be set)
-        // This ensures the database has the correct relationship
         try {
           await categoryApi.update(subcategoryId, {
             parentCategoryId: parentCategoryId
           });
-          console.log('Category updated successfully with parentCategoryId:', parentCategoryId);
-          // Refresh categories after update to ensure local state is updated
           await fetchCategories();
         } catch (error) {
-          console.error('Error updating category parent:', error);
-          console.error('Error details:', error.response?.data);
-          // Continue anyway - the budget will still be created, but might show in wrong section
+          // Continue anyway - the budget will still be created
         }
       }
       
@@ -420,7 +364,7 @@ const Budget = () => {
               });
               await fetchCategories();
             } catch (error) {
-              console.error('Error removing category parent:', error);
+              // Continue with budget update
             }
           }
         }
@@ -437,7 +381,6 @@ const Budget = () => {
       // Refresh budgets immediately - backend should have committed changes
       await fetchBudgets();
     } catch (error) {
-      console.error('Error saving budget:', error);
       let errorMessage = 'Error saving budget. Please try again.';
       if (error.response?.data) {
         if (typeof error.response.data === 'string') {
@@ -450,14 +393,30 @@ const Budget = () => {
     }
   };
 
-  // Delete budget
+  // Handle delete click - show confirmation modal
+  const handleDeleteClick = (budget) => {
+    const categoryName = budget.categoryName || budget.category?.categoryName || 'this budget';
+    setDeleteConfirm({
+      budgetId: budget.budgetId || budget.id,
+      categoryName: categoryName
+    });
+  };
+
+  // Handle confirmed delete
   const handleDeleteBudget = async (budgetId) => {
+    const originalBudgets = budgets;
+    setBudgets(prev => ({
+      categoryBudgets: prev.categoryBudgets.filter(b => (b.budgetId || b.id) !== budgetId),
+      subcategoryBudgets: prev.subcategoryBudgets.filter(b => (b.budgetId || b.id) !== budgetId)
+    }));
+    setDeleteConfirm(null); // Close confirmation dialog
+
     try {
       await budgetApi.delete(budgetId);
-      showToast('Budget deleted successfully!', 'success');
+      showToast('Budget deleted successfully.', 'success');
       fetchBudgets();
     } catch (error) {
-      console.error('Error deleting budget:', error);
+      setBudgets(originalBudgets); // Rollback
       let errorMessage = 'Error deleting budget. Please try again.';
       if (error.response?.data) {
         if (typeof error.response.data === 'string') {
@@ -466,8 +425,13 @@ const Budget = () => {
           errorMessage = error.response.data.message;
         }
       }
-      showToast(errorMessage, 'error');
+      showToast(`Failed to delete budget: ${errorMessage}`, 'error');
     }
+  };
+
+  // Cancel delete confirmation
+  const handleCancelDelete = () => {
+    setDeleteConfirm(null);
   };
 
   // Calculate table progress
@@ -535,7 +499,7 @@ const Budget = () => {
               Edit
             </button>
             <button
-              onClick={() => handleDeleteBudget(budget.budgetId)}
+              onClick={() => handleDeleteClick(budget)}
               className="bg-red-500 text-white px-3 py-1 rounded-lg hover:bg-red-600 transition-colors duration-200 text-sm"
             >
               Delete
@@ -644,13 +608,16 @@ const Budget = () => {
                       setFormData({ ...formData, budgetType: newBudgetType, subcategoryId: '' });
                       // When switching to subcategory, if a category is selected, update subcategories list
                       if (formData.categoryId) {
+                        // Show only children of the selected parent category
                         const availableSubcategories = allCategories
-                          .filter(cat => cat.categoryId !== parseInt(formData.categoryId))
+                          .filter(cat => cat.parentCategoryId === parseInt(formData.categoryId))
                           .map(cat => ({
                             subcategoryId: cat.categoryId,
                             name: cat.name
                           }));
                         setSubcategories(availableSubcategories);
+                      } else {
+                        setSubcategories([]);
                       }
                     }}
                     className={`px-3 py-1 rounded-lg text-sm transition-colors ${
@@ -764,6 +731,47 @@ const Budget = () => {
         </div>
       )}
         
+        {/* Delete Confirmation Modal */}
+        {deleteConfirm && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+               role="dialog" aria-modal="true" aria-label="Confirm Delete"
+               onClick={handleCancelDelete}
+          >
+            <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                 onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900">Delete Budget</h3>
+              </div>
+              
+              <p className="text-gray-600 mb-6">
+                Are you sure you want to delete the budget for <span className="font-semibold text-gray-900">"{deleteConfirm.categoryName}"</span>? 
+                This action cannot be undone.
+              </p>
+              
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={handleCancelDelete}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleDeleteBudget(deleteConfirm.budgetId)}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Toast Notification */}
         {toastMessage && (
           <div

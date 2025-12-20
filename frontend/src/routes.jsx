@@ -30,8 +30,6 @@ const ProtectedRoute = ({ children }) => {
 };
 
 const AppRoutes = () => {
-  console.log('AppRoutes rendering');
-  
   return (
     <Routes>
       {/* Default route / redirect to Login */}

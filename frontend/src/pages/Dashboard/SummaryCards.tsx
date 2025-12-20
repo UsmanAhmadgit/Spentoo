@@ -113,7 +113,7 @@ const SummaryCards = () => {
       <SummaryCard
         icon={PiggyBank}
         title="Total Savings"
-        amount={totalSavings}
+        amount={Math.max(0, totalSavings)}
         gradientClass="bg-gradient-to-br from-info/10 to-info/5"
         iconColorClass="text-info"
       />

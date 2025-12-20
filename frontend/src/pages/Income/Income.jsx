@@ -78,7 +78,6 @@ const formatDate = (dateString) => {
       year: 'numeric',
     });
   } catch (e) {
-    console.warn('Invalid date format:', dateString);
     return '';
   }
 };
@@ -90,6 +89,44 @@ const getTodayDate = () => {
   const day = '' + d.getDate();
   const year = d.getFullYear();
   return [year, month.padStart(2, '0'), day.padStart(2, '0')].join('-');
+};
+
+// Helper to extract error message from API error (filters out localhost URLs)
+const getErrorMessage = (error) => {
+    let message = '';
+    
+    if (error?.response?.data) {
+        if (typeof error.response.data === 'object') {
+            message = error.response.data.message || 
+                     error.response.data.error || 
+                     (Array.isArray(Object.values(error.response.data)[0]) 
+                        ? Object.values(error.response.data)[0][0] 
+                        : Object.values(error.response.data)[0]) || 
+                     'An error occurred';
+        } else if (typeof error.response.data === 'string') {
+            message = error.response.data;
+        }
+    } else if (error?.message) {
+        message = error.message;
+    } else {
+        message = 'An unexpected error occurred';
+    }
+    
+    // Remove localhost URLs, IP addresses, and clean up the message
+    message = message
+        .replace(/https?:\/\/[^\s]+/g, '') // Remove full URLs
+        .replace(/localhost[^\s]*/gi, '') // Remove localhost references
+        .replace(/127\.0\.0\.1[^\s]*/gi, '') // Remove 127.0.0.1 references
+        .replace(/:\d+[^\s]*/g, '') // Remove port numbers
+        .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+        .trim();
+    
+    // If message is empty after cleaning, provide a default
+    if (!message || message.length === 0) {
+        message = 'An error occurred. Please try again.';
+    }
+    
+    return message;
 };
 
 const Income = () => {
@@ -119,8 +156,17 @@ const Income = () => {
   const [editingIncome, setEditingIncome] = useState(null);
   
   // Toast notification state
-  const [toastMessage, setToastMessage] = useState(null);
-  const [toastType, setToastType] = useState('success'); // 'success' or 'error'
+  const [toast, setToast] = useState(null); // { message: string, type: 'success'|'error' }
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { incomeId: number, incomeDescription: string }
+  
+  // Date filter state
+  const [dateFilter, setDateFilter] = useState(() => {
+    const saved = localStorage.getItem('income_date_filter') || 'all';
+    return saved === 'custom' ? 'all' : saved;
+  });
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [showCustomDateRange, setShowCustomDateRange] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -136,17 +182,14 @@ const Income = () => {
 
   // Helper function to show toast
   const showToast = useCallback((message, type = 'success') => {
-    setToastMessage(message);
-    setToastType(type);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3000);
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
   }, []);
 
   // Fetch all incomes - memoized
-  const fetchIncomes = useCallback(async () => {
+  const fetchIncomes = useCallback(async (filter = null, startDate = null, endDate = null) => {
     try {
-      const response = await incomeApi.getAll();
+      const response = await incomeApi.getAll(filter, startDate, endDate);
       const incomesData = Array.isArray(response) ? response : response.incomes || [];
       
       // Process incomes: normalize field names and add category icon/color
@@ -205,9 +248,9 @@ const Income = () => {
       
       setIncomes(processedIncomes);
     } catch (error) {
-      console.error('Error fetching incomes:', error);
       setIncomes([]);
-      showToast('Error fetching incomes. Please try again.', 'error');
+      const errorMessage = getErrorMessage(error);
+      showToast(`Failed to load incomes: ${errorMessage}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -234,15 +277,57 @@ const Income = () => {
       
       setCategories(normalizedCategories);
     } catch (error) {
-      console.error('Error fetching categories:', error);
       setCategories([]);
     }
   }, []);
 
   useEffect(() => {
     fetchCategories();
-    fetchIncomes();
-  }, [fetchCategories, fetchIncomes]);
+  }, [fetchCategories]);
+
+  useEffect(() => {
+    if (dateFilter !== 'custom') {
+      const filterValue = dateFilter === 'all' ? null : dateFilter;
+      fetchIncomes(filterValue);
+    }
+  }, [fetchIncomes, dateFilter]);
+
+  // Handler to change date filter
+  const handleFilterChange = useCallback((filter) => {
+    setDateFilter(filter);
+    localStorage.setItem('income_date_filter', filter);
+    setCustomStartDate('');
+    setCustomEndDate('');
+    setShowCustomDateRange(false);
+  }, []);
+
+  // Handler for custom date range
+  const handleCustomDateRange = useCallback(() => {
+    if (!customStartDate || !customEndDate) {
+      showToast('Please select both start and end dates.', 'error');
+      return;
+    }
+    
+    const start = new Date(customStartDate);
+    const end = new Date(customEndDate);
+    if (start > end) {
+      showToast('Start date cannot be after end date.', 'error');
+      return;
+    }
+    
+    setDateFilter('custom');
+    localStorage.setItem('income_date_filter', 'custom');
+    fetchIncomes(null, customStartDate, customEndDate);
+  }, [customStartDate, customEndDate, fetchIncomes, showToast]);
+
+  // Handler to clear custom date range
+  const handleClearCustomDateRange = useCallback(() => {
+    setCustomStartDate('');
+    setCustomEndDate('');
+    setShowCustomDateRange(false);
+    setDateFilter('all');
+    localStorage.setItem('income_date_filter', 'all');
+  }, []);
 
   // Summary Calculations - memoized
   const summaryData = useMemo(() => {
@@ -304,7 +389,7 @@ const Income = () => {
           dateStr = dateObj.toISOString().substring(0, 10);
         }
       } catch (e) {
-        console.warn('Invalid date format:', incomeDate);
+        // Invalid date format - skip
       }
     }
     
@@ -500,44 +585,42 @@ const Income = () => {
       });
       setFormErrors({});
     } catch (error) {
-      console.error('Error saving income:', error);
-      let errorMessage = 'Error saving income. Please try again.';
-      if (error.response?.data) {
-        if (typeof error.response.data === 'string') {
-          errorMessage = error.response.data;
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message;
-        }
-      }
-      showToast(errorMessage, 'error');
+      const errorMessage = getErrorMessage(error);
+      showToast(`Failed to save income: ${errorMessage}`, 'error');
     } finally {
       setIsSaving(false);
     }
   }, [formData, editingIncome, validate, showToast]);
 
-  // Handle delete - memoized
-  const handleDelete = useCallback(async (incomeId) => {
-    if (!window.confirm('Are you sure you want to delete this income record?')) {
-      return;
-    }
+  // Handle delete click - show confirmation modal
+  const handleDeleteClick = useCallback((income) => {
+    const description = income.description || income.source || income.categoryName || 'this income record';
+    setDeleteConfirm({
+      incomeId: income.id || income.incomeId,
+      incomeDescription: description
+    });
+  }, []);
+
+  // Handle confirmed delete
+  const handleDeleteIncome = useCallback(async (incomeId) => {
+    const originalIncomes = incomes;
+    setIncomes(prevIncomes => prevIncomes.filter(inc => (inc.id || inc.incomeId) !== incomeId));
+    setDeleteConfirm(null); // Close confirmation dialog
 
     try {
       await incomeApi.delete(incomeId);
-      setIncomes(prevIncomes => prevIncomes.filter(inc => (inc.id || inc.incomeId) !== incomeId));
-      showToast('Income deleted successfully!', 'success');
+      showToast('Income deleted successfully.', 'success');
     } catch (error) {
-      console.error('Error deleting income:', error);
-      let errorMessage = 'Error deleting income. Please try again.';
-      if (error.response?.data) {
-        if (typeof error.response.data === 'string') {
-          errorMessage = error.response.data;
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message;
-        }
-      }
-      showToast(errorMessage, 'error');
+      setIncomes(originalIncomes); // Rollback
+      const errorMessage = getErrorMessage(error);
+      showToast(`Failed to delete income: ${errorMessage}`, 'error');
     }
-  }, [showToast]);
+  }, [incomes, showToast]);
+
+  // Cancel delete confirmation
+  const handleCancelDelete = useCallback(() => {
+    setDeleteConfirm(null);
+  }, []);
 
   if (loading) {
     return (
@@ -595,6 +678,113 @@ const Income = () => {
             </div>
           </div>
 
+          {/* Date Filter Buttons */}
+          <div className="mt-6 mb-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-gray-700">Filter by:</span>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleFilterChange('all')}
+                    className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                      dateFilter === 'all' && !showCustomDateRange
+                        ? 'bg-[#7E57C2] text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => handleFilterChange('lastweek')}
+                    className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                      dateFilter === 'lastweek'
+                        ? 'bg-[#7E57C2] text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Last Week
+                  </button>
+                  <button
+                    onClick={() => handleFilterChange('lastmonth')}
+                    className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                      dateFilter === 'lastmonth'
+                        ? 'bg-[#7E57C2] text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Last Month
+                  </button>
+                  <button
+                    onClick={() => handleFilterChange('lastyear')}
+                    className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                      dateFilter === 'lastyear'
+                        ? 'bg-[#7E57C2] text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Last Year
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowCustomDateRange(!showCustomDateRange);
+                      if (!showCustomDateRange) {
+                        setDateFilter('custom');
+                      }
+                    }}
+                    className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                      showCustomDateRange || dateFilter === 'custom'
+                        ? 'bg-[#7E57C2] text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Custom Range
+                  </button>
+                </div>
+              </div>
+              
+              {/* Custom Date Range Picker */}
+              {showCustomDateRange && (
+                <div className="flex flex-wrap items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="incomeStartDate" className="text-sm font-medium text-gray-700">From:</label>
+                    <input
+                      id="incomeStartDate"
+                      type="date"
+                      value={customStartDate}
+                      onChange={(e) => setCustomStartDate(e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#7E57C2] focus:border-transparent"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="incomeEndDate" className="text-sm font-medium text-gray-700">To:</label>
+                    <input
+                      id="incomeEndDate"
+                      type="date"
+                      value={customEndDate}
+                      onChange={(e) => setCustomEndDate(e.target.value)}
+                      max={getTodayDate()}
+                      className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#7E57C2] focus:border-transparent"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCustomDateRange}
+                      className="px-4 py-2 bg-[#7E57C2] text-white rounded-md text-sm font-semibold hover:bg-[#6d47b3] transition"
+                    >
+                      Apply
+                    </button>
+                    <button
+                      onClick={handleClearCustomDateRange}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md text-sm font-semibold hover:bg-gray-300 transition"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Add Income Button */}
           <div style={styles.addButtonContainer}>
             <button onClick={handleAddIncome} style={styles.addButton}>
@@ -648,7 +838,7 @@ const Income = () => {
                             Edit
                           </button>
                           <button
-                            onClick={() => handleDelete(income.id || income.incomeId)}
+                            onClick={() => handleDeleteClick(income)}
                             style={styles.deleteButton}
                           >
                             Delete
@@ -813,15 +1003,53 @@ const Income = () => {
             </div>
           )}
 
-          {/* Toast Notification */}
-          {toastMessage && (
-            <div 
-              className="fixed bottom-6 right-6 text-white px-4 py-2 rounded-lg shadow-xl transition-opacity duration-300 z-50"
-              style={{
-                backgroundColor: toastType === 'success' ? '#43A047' : '#E53935'
-              }}
+          {/* Floating Toast Notification */}
+          {toast && (
+            <div className={`fixed bottom-6 right-6 px-4 py-2 rounded-lg shadow-xl text-white transition-opacity duration-300 z-50 ${
+              toast.type === 'success' ? 'bg-[#43A047]' : 'bg-[#E53935]'
+            }`}>
+              {toast.message}
+            </div>
+          )}
+
+          {/* Delete Confirmation Modal */}
+          {deleteConfirm && (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                 role="dialog" aria-modal="true" aria-label="Confirm Delete"
+                 onClick={handleCancelDelete}
             >
-              {toastMessage}
+              <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                   onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                    <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900">Delete Income</h3>
+                </div>
+                
+                <p className="text-gray-600 mb-6">
+                  Are you sure you want to delete <span className="font-semibold text-gray-900">"{deleteConfirm.incomeDescription}"</span>? 
+                  This action cannot be undone.
+                </p>
+                
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={handleCancelDelete}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleDeleteIncome(deleteConfirm.incomeId)}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

@@ -27,10 +27,10 @@ const formatCurrency = (amount) => {
     return `Rs ${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
-// Formats YYYY-MM string to MMM YYYY (e.g., Dec 2025)
-const formatMonthDisplay = (monthStr) => {
-    if (!monthStr) return '—';
-    return dayjs(monthStr).format('MMM YYYY');
+// Formats date string to readable format (e.g., Dec 15, 2025)
+const formatMonthDisplay = (dateStr) => {
+    if (!dateStr) return '—';
+    return dayjs(dateStr).format('MMM DD, YYYY');
 };
 
 // Formats date string to readable format
@@ -43,8 +43,8 @@ const formatDate = (dateString) => {
     }
 };
 
-// Gets current month in YYYY-MM format (for input min attribute)
-const getCurrentMonthForInput = () => dayjs().format('YYYY-MM');
+// Gets current date in YYYY-MM-DD format (for input min attribute)
+const getCurrentDateForInput = () => dayjs().format('YYYY-MM-DD');
 
 // Determines the Tailwind class for the progress bar color
 const progressColorClass = (percent) => {
@@ -87,12 +87,9 @@ const ProgressDetailsModal = ({ isOpen, onClose, goalId, goalName }) => {
                 possibleSavings: savedAmount,
                 status: goalData.status?.toLowerCase() || 'active',
                 targetAmount,
-                incomeThisMonth: 0, // Not available in backend DTO (calculated internally)
-                expenseThisMonth: 0, // Not available in backend DTO (calculated internally)
                 remainingAmount: Math.max(0, targetAmount - savedAmount),
             });
         } catch (err) {
-            console.error('Error fetching goal progress:', err);
             setError(err?.response?.data?.message || err?.message || 'Failed to fetch progress details.');
         } finally {
             setLoading(false);
@@ -159,9 +156,7 @@ const ProgressDetailsModal = ({ isOpen, onClose, goalId, goalName }) => {
                             {/* Right: Numeric Summary */}
                             <div className="space-y-3">
                                 <DetailRow label="Target Amount" value={formatCurrency(progress.targetAmount)} />
-                                <DetailRow label="Income This Month" value={formatCurrency(progress.incomeThisMonth)} color="text-green-600" />
-                                <DetailRow label="Expense This Month" value={formatCurrency(progress.expenseThisMonth)} color="text-red-600" />
-                                <DetailRow label="Possible Savings" value={formatCurrency(progress.possibleSavings)} color="text-blue-600" />
+                                <DetailRow label="Saved Amount" value={formatCurrency(progress.possibleSavings)} color="text-blue-600" />
                                 <DetailRow label="Remaining Needed" value={formatCurrency(progress.remainingAmount)} />
                             </div>
                         </div>
@@ -189,16 +184,258 @@ const DetailRow = ({ label, value, color = 'text-gray-800' }) => (
     </div>
 );
 
-// --- 5. GoalModal Component (Add/Edit) ---
-// Helper functions for date conversion
-const deadlineToMonth = (deadlineDate) => {
-    if (!deadlineDate) return getCurrentMonthForInput();
-    return dayjs(deadlineDate).format('YYYY-MM');
+// --- AddSavedAmountModal Component ---
+const AddSavedAmountModal = ({ isOpen, onClose, goal, onSave }) => {
+    const [amount, setAmount] = useState('');
+    const [mode, setMode] = useState('add'); // 'add' or 'set'
+    const [errors, setErrors] = useState({});
+    const [isSaving, setIsSaving] = useState(false);
+    const [apiError, setApiError] = useState('');
+
+    useEffect(() => {
+        if (isOpen) {
+            setAmount('');
+            setMode('add');
+            setErrors({});
+            setApiError('');
+        }
+    }, [isOpen]);
+
+    const currentSavedAmount = goal?.savedAmount !== undefined ? Number(goal.savedAmount) : 0;
+    const targetAmount = goal?.targetAmount ? Number(goal.targetAmount) : 0;
+    
+    const calculateNewAmount = () => {
+        if (!amount || isNaN(Number(amount)) || Number(amount) < 0) return currentSavedAmount;
+        const amountToAdd = Number(amount);
+        return mode === 'add' ? currentSavedAmount + amountToAdd : amountToAdd;
+    };
+
+    const newAmount = calculateNewAmount();
+    const newProgress = targetAmount > 0 ? (newAmount / targetAmount) * 100 : 0;
+
+    const validate = () => {
+        const newErrors = {};
+        let isValid = true;
+
+        if (!amount || amount.trim() === '') {
+            newErrors.amount = 'Amount is required.';
+            isValid = false;
+        } else if (isNaN(Number(amount)) || Number(amount) < 0) {
+            newErrors.amount = 'Amount must be a valid positive number.';
+            isValid = false;
+        }
+
+        if (mode === 'set' && Number(amount) > targetAmount) {
+            newErrors.amount = `Amount cannot exceed target amount of ${formatCurrency(targetAmount)}.`;
+            isValid = false;
+        }
+
+        setErrors(newErrors);
+        return isValid;
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setApiError('');
+        if (!validate()) return;
+
+        setIsSaving(true);
+
+        try {
+            const goalId = goal.goalId || goal.id;
+            const newSavedAmount = newAmount;
+
+            // Update the goal with the new savedAmount
+            const payload = {
+                savedAmount: newSavedAmount
+            };
+
+            const result = await savingsApi.update(goalId, payload);
+            
+            if (onSave) {
+                onSave(result);
+            }
+            if (onClose) {
+                onClose();
+            }
+        } catch (error) {
+            const message = error?.response?.data?.message || 
+                          error?.response?.data?.error || 
+                          error?.message || 
+                          'Unknown network error.';
+            setApiError(`Failed to update saved amount: ${message}`);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+             role="dialog" aria-modal="true" aria-label="Add Saved Amount"
+             onClick={onClose}
+        >
+            <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl transition-all duration-200"
+                 onClick={e => e.stopPropagation()}
+            >
+                {/* Header */}
+                <div className="flex-shrink-0 p-6 pb-4 border-b border-gray-200">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-xl font-bold text-[#7E57C2]">Add Saved Amount</h2>
+                        <button
+                            onClick={onClose}
+                            className="text-gray-400 hover:text-gray-700 transition"
+                            aria-label="Close modal"
+                            type="button"
+                        >
+                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">{goal?.name}</p>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto p-6">
+                    {apiError && (
+                        <div className="p-3 mb-4 text-[#E53935] bg-red-100 rounded-lg border border-red-300 text-sm">
+                            {apiError}
+                        </div>
+                    )}
+
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        {/* Current Saved Amount Display */}
+                        <div className="bg-gray-50 rounded-lg p-4">
+                            <p className="text-sm text-gray-600 mb-1">Current Saved Amount</p>
+                            <p className="text-2xl font-bold text-[#4CAF50]">{formatCurrency(currentSavedAmount)}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                                Target: {formatCurrency(targetAmount)} • Progress: {((currentSavedAmount / targetAmount) * 100).toFixed(0)}%
+                            </p>
+                        </div>
+
+                        {/* Mode Selection */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Action Type</label>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setMode('add')}
+                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                        mode === 'add'
+                                            ? 'bg-[#7E57C2] text-white'
+                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                    }`}
+                                >
+                                    Add Amount
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setMode('set')}
+                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                        mode === 'set'
+                                            ? 'bg-[#7E57C2] text-white'
+                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                    }`}
+                                >
+                                    Set Amount
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                                {mode === 'add' 
+                                    ? 'Add to existing saved amount (accumulative)' 
+                                    : 'Replace current saved amount'}
+                            </p>
+                        </div>
+
+                        {/* Amount Input */}
+                        <div>
+                            <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-1">
+                                {mode === 'add' ? 'Amount to Add (Rs)' : 'New Saved Amount (Rs)'} *
+                            </label>
+                            <input
+                                id="amount"
+                                type="number"
+                                inputMode="decimal"
+                                value={amount}
+                                onChange={(e) => {
+                                    setAmount(e.target.value);
+                                    if (errors.amount) setErrors(prev => ({ ...prev, amount: undefined }));
+                                }}
+                                placeholder="0.00"
+                                step="0.01"
+                                min="0"
+                                className={`w-full border-b-2 py-2 px-1 bg-transparent outline-none transition focus:border-[#7E57C2] focus:ring-1 focus:ring-[#7E57C2] ${
+                                    errors.amount ? 'border-red-500' : 'border-gray-300'
+                                }`}
+                            />
+                            {errors.amount && <p className="text-red-600 text-xs mt-1">{errors.amount}</p>}
+                        </div>
+
+                        {/* Preview */}
+                        {amount && !errors.amount && !isNaN(Number(amount)) && Number(amount) >= 0 && (
+                            <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                                <p className="text-sm text-gray-600 mb-2">Preview</p>
+                                <div className="space-y-1">
+                                    <div className="flex justify-between">
+                                        <span className="text-sm text-gray-600">Current:</span>
+                                        <span className="text-sm font-semibold">{formatCurrency(currentSavedAmount)}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-sm text-gray-600">
+                                            {mode === 'add' ? 'Adding:' : 'Setting to:'}
+                                        </span>
+                                        <span className="text-sm font-semibold text-[#7E57C2]">
+                                            {mode === 'add' ? `+${formatCurrency(Number(amount))}` : formatCurrency(Number(amount))}
+                                        </span>
+                                    </div>
+                                    <div className="border-t border-purple-200 pt-1 mt-1 flex justify-between">
+                                        <span className="text-sm font-semibold text-gray-700">New Total:</span>
+                                        <span className="text-sm font-bold text-[#4CAF50]">{formatCurrency(newAmount)}</span>
+                                    </div>
+                                    <div className="flex justify-between mt-2">
+                                        <span className="text-xs text-gray-500">New Progress:</span>
+                                        <span className="text-xs font-semibold text-[#7E57C2]">{newProgress.toFixed(1)}%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Form Actions */}
+                        <div className="pt-4 flex justify-end space-x-4">
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="text-gray-700 border border-gray-300 rounded-full px-4 py-2 font-medium hover:bg-gray-50 transition"
+                                disabled={isSaving}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSaving}
+                                className={`inline-flex items-center gap-2 px-6 py-2 rounded-full font-semibold text-white shadow-md transition duration-300 transform ${
+                                    isSaving
+                                        ? 'bg-gray-400'
+                                        : 'bg-gradient-to-r from-[#7E57C2] to-[#8E24AA] hover:shadow-lg hover:-translate-y-0.5'
+                                }`}
+                            >
+                                {isSaving ? 'Saving...' : (mode === 'add' ? 'Add Amount' : 'Set Amount')}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    );
 };
 
-const monthToDeadline = (month) => {
-    if (!month) return dayjs().format('YYYY-MM-DD');
-    return dayjs(month).startOf('month').format('YYYY-MM-DD');
+// --- 5. GoalModal Component (Add/Edit) ---
+// Helper function for date conversion
+const formatDeadlineForInput = (deadlineDate) => {
+    if (!deadlineDate) return getCurrentDateForInput();
+    return dayjs(deadlineDate).format('YYYY-MM-DD');
 };
 
 // --- Custom Month Picker Component ---
@@ -391,7 +628,7 @@ const MonthPicker = ({ value, onChange, min, disabled, error, className = '' }) 
                             <button
                                 type="button"
                                 onClick={() => {
-                                    const currentMonth = getCurrentMonthForInput();
+                                    const currentMonth = dayjs().format('YYYY-MM');
                                     handleMonthSelect(currentMonth);
                                 }}
                                 className="w-full px-2 py-1 text-xs text-[#7E57C2] hover:bg-purple-50 rounded transition"
@@ -412,9 +649,11 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
     const [formData, setFormData] = useState({
         name: initialData?.name || '',
         targetAmount: initialData?.targetAmount || '',
-        month: deadlineToMonth(initialData?.deadlineDate) || getCurrentMonthForInput(),
+        savedAmount: initialData?.savedAmount || '',
+        deadlineDate: formatDeadlineForInput(initialData?.deadlineDate) || getCurrentDateForInput(),
         priority: initialData?.priority || 'Medium', // Frontend-only field, not sent to backend
     });
+    const [addAmount, setAddAmount] = useState(''); // Amount to add (accumulative)
     const [formErrors, setFormErrors] = useState({});
     const [apiError, setApiError] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -428,9 +667,11 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
             setFormData({
                 name: initialData?.name || '',
                 targetAmount: initialData?.targetAmount || '',
-                month: deadlineToMonth(initialData?.deadlineDate) || getCurrentMonthForInput(),
+                savedAmount: initialData?.savedAmount || '',
+                deadlineDate: formatDeadlineForInput(initialData?.deadlineDate) || getCurrentDateForInput(),
                 priority: initialData?.priority || 'Medium',
             });
+            setAddAmount(''); // Reset add amount field
             
             setTimeout(() => initialFocusRef.current?.focus(), 50);
             const handleEscape = (e) => { 
@@ -463,10 +704,25 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
             isValid = false;
         }
         
-        // Month validation: must be current or future
-        if (!formData.month || dayjs(formData.month).isBefore(dayjs(), 'month')) {
-             errors.month = 'Month must be current or future.';
-             isValid = false;
+        // Saved amount validation (optional, but if provided must be valid)
+        if (formData.savedAmount !== '' && formData.savedAmount !== null && formData.savedAmount !== undefined) {
+            if (isNaN(Number(formData.savedAmount)) || Number(formData.savedAmount) < 0) {
+                errors.savedAmount = 'Saved Amount must be 0 or greater.';
+                isValid = false;
+            }
+        }
+        
+        // Deadline date validation: must be today or future
+        if (!formData.deadlineDate) {
+            errors.deadlineDate = 'Deadline date is required.';
+            isValid = false;
+        } else {
+            const deadlineDate = dayjs(formData.deadlineDate);
+            const today = dayjs().startOf('day');
+            if (deadlineDate.isBefore(today)) {
+                errors.deadlineDate = 'Deadline date must be today or future.';
+                isValid = false;
+            }
         }
 
         setFormErrors(errors);
@@ -481,13 +737,13 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
         setIsSaving(true);
 
         // Prepare payload matching backend DTO structure
+        // Use savedAmount directly from formData (user-entered value)
         const payload = {
             name: formData.name.trim(),
             targetAmount: Number(formData.targetAmount),
-            deadlineDate: monthToDeadline(formData.month), // Convert month to deadlineDate (first day of month)
+            savedAmount: Number(formData.savedAmount) || 0,
+            deadlineDate: formData.deadlineDate, // Use deadlineDate directly
         };
-
-        console.log('Sending goal payload:', payload);
 
         try {
             let result;
@@ -503,8 +759,6 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
                 onClose();
             }
         } catch (error) {
-            console.error('Error saving goal:', error);
-            console.error('Error response:', error?.response?.data);
             const message = error?.response?.data?.message || 
                           error?.response?.data?.error || 
                           error?.message || 
@@ -602,19 +856,44 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
                             </div>
                         </div>
 
-                        {/* Month and Priority */}
+                        {/* Saved Amount */}
+                        <div>
+                            <label htmlFor="savedAmount" className="block text-sm font-medium text-gray-700 mb-1">Saved Amount (Rs) *</label>
+                            <input
+                                id="savedAmount"
+                                name="savedAmount"
+                                type="number"
+                                inputMode="decimal"
+                                value={formData.savedAmount}
+                                onChange={handleChange}
+                                placeholder="0.00"
+                                step="0.01"
+                                min="0"
+                                disabled={isGoalCompleted}
+                                className={`w-full border-b-2 py-2 px-1 bg-transparent outline-none transition focus:border-[#7E57C2] focus:ring-1 focus:ring-[#7E57C2] ${formErrors.savedAmount ? 'border-red-500' : 'border-gray-300'} ${isGoalCompleted ? 'bg-gray-100' : ''}`}
+                            />
+                            {formErrors.savedAmount && <p className="text-red-600 text-xs mt-1">{formErrors.savedAmount}</p>}
+                            <p className="text-xs text-gray-500 mt-1">Enter the amount you have saved for this goal.</p>
+                        </div>
+
+                        {/* Deadline Date and Priority */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
-                                <label htmlFor="month" className="block text-sm font-medium text-gray-700 mb-1">Target Month *</label>
-                                <MonthPicker
-                                    value={formData.month}
+                                <label htmlFor="deadlineDate" className="block text-sm font-medium text-gray-700 mb-1">Target Date *</label>
+                                <input
+                                    id="deadlineDate"
+                                    name="deadlineDate"
+                                    type="date"
+                                    value={formData.deadlineDate}
                                     onChange={handleChange}
-                                    min={getCurrentMonthForInput()}
+                                    min={getCurrentDateForInput()}
                                     disabled={isGoalCompleted}
-                                    error={!!formErrors.month}
+                                    className={`w-full border-b-2 py-2 px-1 bg-transparent outline-none transition focus:border-[#7E57C2] focus:ring-1 focus:ring-[#7E57C2] ${
+                                        formErrors.deadlineDate ? 'border-red-500' : 'border-gray-300'
+                                    } ${isGoalCompleted ? 'bg-gray-100' : ''}`}
                                 />
-                                {formErrors.month && <p className="text-red-600 text-xs mt-1">{formErrors.month}</p>}
-                                <p className="text-xs text-gray-500 mt-1">Month must be current or future.</p>
+                                {formErrors.deadlineDate && <p className="text-red-600 text-xs mt-1">{formErrors.deadlineDate}</p>}
+                                <p className="text-xs text-gray-500 mt-1">Date must be today or future.</p>
                             </div>
                             
                             <div>
@@ -635,26 +914,68 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
                         </div>
 
                         {/* Form Actions */}
-                        <div className="pt-4 flex justify-end space-x-4">
-                            <button
-                                type="button"
-                                onClick={onClose}
-                                className="text-gray-700 border border-gray-300 rounded-full px-4 py-2 font-medium hover:bg-gray-50 transition"
-                                disabled={isSaving}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                disabled={isSaving || isGoalCompleted}
-                                className={`inline-flex items-center gap-2 px-6 py-2 rounded-full font-semibold text-white shadow-md transition duration-300 transform ${
-                                    isSaving
-                                        ? 'bg-gray-400'
-                                        : 'bg-gradient-to-r from-[#7E57C2] to-[#8E24AA] hover:shadow-lg hover:-translate-y-0.5'
-                                } ${isGoalCompleted ? 'cursor-not-allowed opacity-50' : ''}`}
-                            >
-                                {isSaving ? 'Saving...' : (isEditMode ? 'Save changes' : 'Add Goal')}
-                            </button>
+                        <div className="pt-4 flex justify-between items-center">
+                            {/* Achieve Goal Button (only in edit mode and not completed) */}
+                            {isEditMode && !isGoalCompleted && (
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        setIsSaving(true);
+                                        try {
+                                            const id = initialData.goalId || initialData.id;
+                                            const targetAmount = Number(initialData.targetAmount) || 0;
+                                            // Automatically set savedAmount to targetAmount and status to COMPLETED
+                                            const payload = {
+                                                savedAmount: targetAmount,
+                                                status: 'COMPLETED'
+                                            };
+                                            const result = await savingsApi.update(id, payload);
+                                            onSave(result);
+                                            if (onClose) {
+                                                onClose();
+                                            }
+                                        } catch (error) {
+                                            const message = error?.response?.data?.message || 
+                                                          error?.response?.data?.error || 
+                                                          error?.message || 
+                                                          'Unknown network error.';
+                                            setApiError(`Failed to achieve goal: ${message}`);
+                                        } finally {
+                                            setIsSaving(false);
+                                        }
+                                    }}
+                                    disabled={isSaving}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-full font-semibold text-white shadow-md transition duration-300 transform bg-gradient-to-r from-green-500 to-green-600 hover:shadow-lg hover:-translate-y-0.5 disabled:opacity-50"
+                                >
+                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    Achieve Goal
+                                </button>
+                            )}
+                            {!isEditMode && <div></div>}
+                            
+                            <div className="flex gap-3">
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    className="text-gray-700 border border-gray-300 rounded-full px-4 py-2 font-medium hover:bg-gray-50 transition"
+                                    disabled={isSaving}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSaving || isGoalCompleted}
+                                    className={`inline-flex items-center gap-2 px-6 py-2 rounded-full font-semibold text-white shadow-md transition duration-300 transform ${
+                                        isSaving
+                                            ? 'bg-gray-400'
+                                            : 'bg-gradient-to-r from-[#7E57C2] to-[#8E24AA] hover:shadow-lg hover:-translate-y-0.5'
+                                    } ${isGoalCompleted ? 'cursor-not-allowed opacity-50' : ''}`}
+                                >
+                                    {isSaving ? 'Saving...' : (isEditMode ? 'Save changes' : 'Add Goal')}
+                                </button>
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -664,7 +985,7 @@ const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
 };
 
 // --- 6. GoalRow Component ---
-const GoalRow = ({ goal, onEdit, onDelete, onDetails, onStatusChange }) => {
+const GoalRow = ({ goal, onEdit, onDelete, onDetails, onStatusChange, onAddAmount }) => {
     // Normalize status - backend uses uppercase (ACTIVE, COMPLETED, FAILED), frontend expects lowercase
     const normalizedStatus = goal.status?.toLowerCase() || 'active';
     
@@ -696,7 +1017,6 @@ const GoalRow = ({ goal, onEdit, onDelete, onDetails, onStatusChange }) => {
                     status: status,
                 });
             } catch (err) {
-                console.error('Error fetching inline progress:', err);
                 // Keep existing progress or default
                 setProgress(prev => ({ 
                     ...prev, 
@@ -747,7 +1067,7 @@ const GoalRow = ({ goal, onEdit, onDelete, onDetails, onStatusChange }) => {
                     <p className="text-sm text-gray-600 mt-1">
                         Target: <span className="font-semibold text-[#7E57C2]">{formatCurrency(goal.targetAmount)}</span>
                         {' • '}
-                        Month: <span className="font-medium">{formatMonthDisplay(goal.month || goal.deadlineDate)}</span>
+                        Target Date: <span className="font-medium">{formatMonthDisplay(goal.deadlineDate || goal.month)}</span>
                     </p>
                 </div>
 
@@ -779,9 +1099,17 @@ const GoalRow = ({ goal, onEdit, onDelete, onDetails, onStatusChange }) => {
                 {/* Right: Status and Actions */}
                 <div className="flex flex-col sm:flex-row items-end sm:items-center gap-3 w-full lg:w-auto lg:justify-end">
                     <span className={`px-3 py-1 text-xs rounded-full font-semibold ${statusClass} flex-shrink-0`}>
-                        {status.toUpperCase()}
+                        {status === 'completed' ? 'ACHIEVED' : status.toUpperCase()}
                     </span>
                     <div className="flex flex-wrap justify-end gap-2">
+                        {/* Add Amount */}
+                        <button
+                            onClick={() => onAddAmount && onAddAmount(goal)}
+                            className="text-xs font-medium border border-green-500 text-green-600 hover:bg-green-50 px-3 py-1 rounded-md transition"
+                            aria-label={`Add saved amount to ${goal.name}`}
+                        >
+                            Add Amount
+                        </button>
                         {/* Details */}
                         <button
                             onClick={() => onDetails(goal.goalId || goal.id, goal.name)}
@@ -811,7 +1139,7 @@ const GoalRow = ({ goal, onEdit, onDelete, onDetails, onStatusChange }) => {
                         
                         {/* Delete */}
                         <button
-                            onClick={() => onDelete(goal.goalId || goal.id)}
+                            onClick={() => onDelete(goal)}
                             className="text-xs font-medium text-[#E53935] hover:bg-red-50 px-3 py-1 rounded-md transition"
                             aria-label={`Delete goal ${goal.name}`}
                         >
@@ -832,12 +1160,17 @@ const GoalsPage = () => {
     const [modalOpen, setModalOpen] = useState(false);
     const [editItem, setEditItem] = useState(null);
     const [toast, setToast] = useState(null);
+    const [deleteConfirm, setDeleteConfirm] = useState(null); // { goalId: number, goalName: string }
     const [pageError, setPageError] = useState(null);
     
     // Progress Details Modal State
     const [progressModalOpen, setProgressModalOpen] = useState(false);
     const [selectedGoalId, setSelectedGoalId] = useState(null);
     const [selectedGoalName, setSelectedGoalName] = useState('');
+    
+    // Add Saved Amount Modal State
+    const [addAmountModalOpen, setAddAmountModalOpen] = useState(false);
+    const [selectedGoalForAmount, setSelectedGoalForAmount] = useState(null);
 
     const showToast = (message, type = 'success') => {
         setToast({ message, type });
@@ -848,24 +1181,21 @@ const GoalsPage = () => {
         setLoading(true);
         setPageError(null);
         try {
-            console.log('Fetching goals...');
-            console.log('API Base URL:', process.env.REACT_APP_API_BASE_URL || 'http://localhost:8080/api');
-            console.log('Full endpoint will be:', `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:8080/api'}/goals`);
-            
             const data = await savingsApi.getAll();
-            console.log('Received goals data:', data);
-            console.log('Data type:', typeof data, 'Is array:', Array.isArray(data));
             
             // Normalize IDs and convert deadlineDate to month for display
-            // Backend returns savedAmount and progressPercentage in the DTO
-            const normalizedGoals = (Array.isArray(data) ? data : []).map(goal => ({
-                ...goal,
-                id: goal.goalId || goal.id, // Normalize ID field
-                month: goal.deadlineDate ? dayjs(goal.deadlineDate).format('YYYY-MM') : null, // Convert deadlineDate to month
-                // Ensure savedAmount and progressPercentage are numbers
-                savedAmount: goal.savedAmount ? Number(goal.savedAmount) : 0,
-                progressPercentage: goal.progressPercentage ? Number(goal.progressPercentage) : 0,
-            }));
+            const normalizedGoals = (Array.isArray(data) ? data : []).map(goal => {
+                const savedAmount = (goal.savedAmount !== undefined && goal.savedAmount !== null) ? Number(goal.savedAmount) : 0;
+                const progressPercentage = (goal.progressPercentage !== undefined && goal.progressPercentage !== null) ? Number(goal.progressPercentage) : 0;
+                
+                return {
+                    ...goal,
+                    id: goal.goalId || goal.id,
+                    month: goal.deadlineDate ? dayjs(goal.deadlineDate).format('YYYY-MM') : null,
+                    savedAmount,
+                    progressPercentage,
+                };
+            });
 
             // Sort by deadlineDate ascending (to show oldest goal first)
             setGoals(normalizedGoals.sort((a, b) => {
@@ -874,12 +1204,6 @@ const GoalsPage = () => {
                 return dateA - dateB;
             }));
         } catch (error) {
-            console.error('Error fetching goals:', error);
-            console.error('Error response:', error?.response);
-            console.error('Error response data:', error?.response?.data);
-            console.error('Error response status:', error?.response?.status);
-            console.error('Error config:', error?.config);
-            
             // Extract detailed error information
             let errorMessage = 'Unknown error occurred';
             const statusCode = error?.response?.status || 'Network Error';
@@ -893,8 +1217,6 @@ const GoalsPage = () => {
                     errorMessage = error.response.data.error;
                 } else if (error.response.data.errorMessage) {
                     errorMessage = error.response.data.errorMessage;
-                } else {
-                    errorMessage = JSON.stringify(error.response.data);
                 }
             } else if (error?.message) {
                 errorMessage = error.message;
@@ -929,18 +1251,34 @@ const GoalsPage = () => {
         setModalOpen(false); // Ensure modal is closed after save
     };
 
-    const handleDelete = async (id) => {
+    // Handle delete click - show confirmation modal
+    const handleDeleteClick = useCallback((goal) => {
+        setDeleteConfirm({
+            goalId: goal.goalId || goal.id,
+            goalName: goal.name || goal.goalName || 'this goal'
+        });
+    }, []);
+
+    // Handle confirmed delete
+    const handleDelete = async (goalId) => {
         const originalGoals = goals;
-        setGoals(prev => prev.filter(g => (g.goalId || g.id) !== id));
+        setGoals(prev => prev.filter(g => (g.goalId || g.id) !== goalId));
+        setDeleteConfirm(null); // Close confirmation dialog
         
         try {
-            await savingsApi.delete(id);
+            await savingsApi.delete(goalId);
             showToast('Goal deleted successfully.', 'success');
         } catch (error) {
             setGoals(originalGoals); // Rollback
-            showToast(`Delete failed: ${error?.response?.data?.message || error?.message || 'Error'}`, 'error');
+            const errorMessage = error?.response?.data?.message || error?.message || 'Error';
+            showToast(`Failed to delete goal: ${errorMessage}`, 'error');
         }
     };
+
+    // Cancel delete confirmation
+    const handleCancelDelete = useCallback(() => {
+        setDeleteConfirm(null);
+    }, []);
     
     const handleStatusChange = async (id, action) => {
         // Backend doesn't support pause/resume - status is calculated automatically
@@ -956,6 +1294,18 @@ const GoalsPage = () => {
         setSelectedGoalId(goalId);
         setSelectedGoalName(name);
         setProgressModalOpen(true);
+    };
+
+    const handleAddAmount = (goal) => {
+        setSelectedGoalForAmount(goal);
+        setAddAmountModalOpen(true);
+    };
+
+    const handleAmountSaved = async (updatedGoal) => {
+        await fetchGoals();
+        showToast('Saved amount updated successfully.', 'success');
+        setAddAmountModalOpen(false);
+        setSelectedGoalForAmount(null);
     };
 
     // Calculate summary statistics - memoized
@@ -1035,9 +1385,10 @@ const GoalsPage = () => {
                             key={g.id || g.goalId}
                             goal={g}
                             onEdit={g => { setEditItem(g); setModalOpen(true); }}
-                            onDelete={handleDelete}
+                            onDelete={handleDeleteClick}
                             onDetails={handleDetails}
                             onStatusChange={handleStatusChange}
+                            onAddAmount={handleAddAmount}
                         />
                     ))}
                 </div>
@@ -1094,6 +1445,48 @@ const GoalsPage = () => {
                     </div>
                     {/* Toast Notification */}
                     {toast && <Toast message={toast.message} type={toast.type} />}
+
+                    {/* Delete Confirmation Modal */}
+                    {deleteConfirm && (
+                        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                             role="dialog" aria-modal="true" aria-label="Confirm Delete"
+                             onClick={handleCancelDelete}
+                        >
+                            <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                                 onClick={e => e.stopPropagation()}
+                            >
+                                <div className="flex items-center gap-3 mb-4">
+                                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                                        <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-lg font-semibold text-gray-900">Delete Goal</h3>
+                                </div>
+                                
+                                <p className="text-gray-600 mb-6">
+                                    Are you sure you want to delete <span className="font-semibold text-gray-900">"{deleteConfirm.goalName}"</span>? 
+                                    This action cannot be undone.
+                                </p>
+                                
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        onClick={handleCancelDelete}
+                                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => handleDelete(deleteConfirm.goalId)}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Add/Edit Modal */}
                     <GoalModal
                         isOpen={modalOpen}
@@ -1110,6 +1503,16 @@ const GoalsPage = () => {
                         onClose={() => setProgressModalOpen(false)}
                         goalId={selectedGoalId}
                         goalName={selectedGoalName}
+                    />
+                    {/* Add Saved Amount Modal */}
+                    <AddSavedAmountModal
+                        isOpen={addAmountModalOpen}
+                        onClose={() => {
+                            setAddAmountModalOpen(false);
+                            setSelectedGoalForAmount(null);
+                        }}
+                        goal={selectedGoalForAmount}
+                        onSave={handleAmountSaved}
                     />
                 </div>
             </main>

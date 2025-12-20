@@ -72,7 +72,7 @@ const Categories = () => {
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   
   // Confirmation modal state
-  const [confirmModal, setConfirmModal] = useState({ open: false, message: '', onConfirm: null });
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { categoryId: number, categoryName: string }
 
   // Get icon and color for a category name (case-insensitive matching) - memoized
   const getCategoryStyle = useCallback((name) => {
@@ -106,14 +106,9 @@ const Categories = () => {
     }, 3000);
   }, []);
   
-  // Helper function to show confirmation modal
-  const showConfirm = useCallback((message, onConfirm) => {
-    setConfirmModal({ open: true, message, onConfirm });
-  }, []);
-  
-  // Close confirmation modal
-  const closeConfirm = useCallback(() => {
-    setConfirmModal({ open: false, message: '', onConfirm: null });
+  // Cancel delete confirmation
+  const handleCancelDelete = useCallback(() => {
+    setDeleteConfirm(null);
   }, []);
 
   // Fetch all categories - memoized
@@ -123,7 +118,6 @@ const Categories = () => {
       const categoriesData = Array.isArray(response) ? response : response.categories || [];
       setCategories(categoriesData);
     } catch (error) {
-      console.error('Error fetching categories:', error);
       setCategories([]);
       showToast('Error fetching categories. Please try again.', 'error');
     }
@@ -275,11 +269,13 @@ const Categories = () => {
           await categoryApi.create(apiData);
         }
         
+        // Invalidate cache after create/update
+        categoryApi.invalidateCache();
+        
         setModalOpen(false);
         fetchCategories();
         showToast(currentCategory ? 'Category updated successfully!' : 'Category added successfully!', 'success');
       } catch (error) {
-        console.error('Error saving category:', error);
         // Better error message extraction
         let errorMessage = 'Error saving category. Please try again.';
         if (error.response?.data) {
@@ -303,41 +299,49 @@ const Categories = () => {
     }
   };
 
-  // Delete category - memoized
-  const handleDelete = useCallback((categoryId) => {
-    showConfirm(
-      'Are you sure you want to delete this category?',
-      async () => {
-      try {
-        await categoryApi.delete(categoryId);
-        fetchCategories();
-          showToast('Category deleted successfully!', 'success');
-          closeConfirm();
-      } catch (error) {
-        console.error('Error deleting category:', error);
-          let errorMessage = 'Error deleting category. Please try again.';
-          if (error.response?.data) {
-            if (typeof error.response.data === 'string') {
-              errorMessage = error.response.data;
-            } else if (error.response.data.message) {
-              errorMessage = error.response.data.message;
-    }
-          }
-          showToast(errorMessage, 'error');
-          closeConfirm();
+  // Handle delete click - show confirmation modal
+  const handleDeleteClick = useCallback((category) => {
+    setDeleteConfirm({
+      categoryId: category.categoryId || category.id,
+      categoryName: category.categoryName || category.name || 'this category'
+    });
+  }, []);
+
+  // Handle confirmed delete
+  const handleDeleteCategory = useCallback(async (categoryId) => {
+    const originalCategories = categories;
+    setCategories(prev => prev.filter(c => (c.categoryId || c.id) !== categoryId));
+    setDeleteConfirm(null); // Close confirmation dialog
+
+    try {
+      await categoryApi.delete(categoryId);
+      // Invalidate cache after delete
+      categoryApi.invalidateCache();
+      await fetchCategories();
+      showToast('Category deleted successfully.', 'success');
+    } catch (error) {
+      setCategories(originalCategories); // Rollback
+      let errorMessage = 'Error deleting category. Please try again.';
+      if (error.response?.data) {
+        if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        } else if (error.response.data.message) {
+          errorMessage = error.response.data.message;
         }
       }
-    );
-  }, [showConfirm, closeConfirm, fetchCategories, showToast]);
+      showToast(`Failed to delete category: ${errorMessage}`, 'error');
+    }
+  }, [categories, fetchCategories, showToast]);
 
   // Restore category - memoized
   const handleRestore = useCallback(async (categoryId) => {
     try {
       await categoryApi.restore(categoryId);
+      // Invalidate cache after restore
+      categoryApi.invalidateCache();
       fetchCategories();
       showToast('Category restored successfully!', 'success');
     } catch (error) {
-      console.error('Error restoring category:', error);
       let errorMessage = 'Error restoring category. Please try again.';
       if (error.response?.data) {
         if (typeof error.response.data === 'string') {
@@ -349,25 +353,6 @@ const Categories = () => {
       showToast(errorMessage, 'error');
     }
   }, [fetchCategories, showToast]);
-
-  // Export categories - memoized
-  const handleExport = useCallback(async () => {
-    try {
-      const blob = await categoryApi.export();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'categories.xlsx');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      showToast('Categories exported successfully!', 'success');
-    } catch (error) {
-      console.error('Error exporting categories:', error);
-      showToast('Error exporting categories. Please try again.', 'error');
-    }
-  }, [showToast]);
 
   // Render category item
   const renderCategory = (category, level = 0) => {
@@ -469,7 +454,7 @@ const Categories = () => {
                   Edit
                 </button>
                 <button
-                  onClick={() => handleDelete(category.categoryId)}
+                  onClick={() => handleDeleteClick(category)}
                   style={{ ...styles.actionButton, ...styles.deleteButton }}
                 >
                   Delete
@@ -570,12 +555,6 @@ const Categories = () => {
             style={styles.addButton}
           >
             Add Category
-          </button>
-          <button
-            onClick={handleExport}
-            style={styles.exportButton}
-          >
-            Export
           </button>
         </div>
       </div>
@@ -861,34 +840,41 @@ const Categories = () => {
         </div>
       )}
 
-      {/* Confirmation Modal */}
-      {confirmModal.open && (
-        <div 
-          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center"
-          onClick={closeConfirm}
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+             role="dialog" aria-modal="true" aria-label="Confirm Delete"
+             onClick={handleCancelDelete}
         >
-          <div 
-            className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+               onClick={e => e.stopPropagation()}
           >
-            <h3 className="text-xl font-bold text-[#212121] mb-4">Confirm Action</h3>
-            <p className="text-gray-700 mb-6">{confirmModal.message}</p>
-            <div className="flex gap-3 justify-end">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Delete Category</h3>
+            </div>
+            
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete <span className="font-semibold text-gray-900">"{deleteConfirm.categoryName}"</span>? 
+              This action cannot be undone.
+            </p>
+            
+            <div className="flex justify-end gap-3">
               <button
-                onClick={closeConfirm}
-                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg font-semibold hover:bg-gray-300 transition"
+                onClick={handleCancelDelete}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  if (confirmModal.onConfirm) {
-                    confirmModal.onConfirm();
-                  }
-                }}
-                className="px-4 py-2 bg-[#E53935] text-white rounded-lg font-semibold hover:bg-[#C62828] transition"
+                onClick={() => handleDeleteCategory(deleteConfirm.categoryId)}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
               >
-                Confirm
+                Delete
               </button>
             </div>
           </div>
@@ -943,18 +929,6 @@ const styles = {
   addButton: {
     padding: '10px 20px',
     backgroundColor: '#43A047',
-    color: '#ffffff',
-    border: 'none',
-    borderRadius: '8px',
-    fontSize: '14px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: 'all 0.3s ease',
-    fontFamily: 'inherit'
-  },
-  exportButton: {
-    padding: '10px 20px',
-    backgroundColor: '#1E88E5',
     color: '#ffffff',
     border: 'none',
     borderRadius: '8px',

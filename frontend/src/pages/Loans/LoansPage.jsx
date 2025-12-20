@@ -4,7 +4,6 @@ import Sidebar from '../Dashboard/Sidebar';
 import { cn } from '../../lib/utils';
 import { loanApi } from '../../api/loanApi';
 import { paymentMethodApi } from '../../api/paymentMethodApi';
-import { toast } from '../../hooks/use-toast';
 import { formatCurrency } from '../../utils/formatCurrency';
 import { formatDate } from '../../utils/formatDate';
 
@@ -32,7 +31,6 @@ const formatForInput = (dateString) => {
         if (isNaN(date.getTime())) return '';
         return date.toISOString().substring(0, 10);
     } catch (e) {
-        console.warn('Invalid date format:', dateString);
         return '';
     }
 };
@@ -46,43 +44,69 @@ const getTodayDate = () => {
 // Generates a temporary ID for client-side use
 const generateTempId = () => Math.random().toString(36).substring(2, 9);
 
-// Helper to extract error message from API error
+// Helper to extract error message from API error (filters out localhost URLs)
 const getErrorMessage = (error) => {
+    let message = '';
+    
     if (error?.response?.data) {
         if (typeof error.response.data === 'object') {
-            return error.response.data.message || 
-                   error.response.data.error || 
-                   Object.values(error.response.data)[0] || 
-                   'An error occurred';
+            message = error.response.data.message || 
+                     error.response.data.error || 
+                     (Array.isArray(Object.values(error.response.data)[0]) 
+                        ? Object.values(error.response.data)[0][0] 
+                        : Object.values(error.response.data)[0]) || 
+                     'An error occurred';
+        } else if (typeof error.response.data === 'string') {
+            message = error.response.data;
         }
-        if (typeof error.response.data === 'string') {
-            return error.response.data;
-        }
+    } else if (error?.message) {
+        message = error.message;
+    } else {
+        message = 'An unexpected error occurred';
     }
-    return error?.message || 'An unexpected error occurred';
+    
+    // Remove localhost URLs, IP addresses, and clean up the message
+    message = message
+        .replace(/https?:\/\/[^\s]+/g, '') // Remove full URLs
+        .replace(/localhost[^\s]*/gi, '') // Remove localhost references
+        .replace(/127\.0\.0\.1[^\s]*/gi, '') // Remove 127.0.0.1 references
+        .replace(/:\d+[^\s]*/g, '') // Remove port numbers
+        .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+        .trim();
+    
+    // If message is empty after cleaning, provide a default
+    if (!message || message.length === 0) {
+        message = 'An error occurred. Please try again.';
+    }
+    
+    return message;
 };
 
 // --- InstallmentRow Component (Display Mode) ---
-const InstallmentRow = React.memo(({ installment, onDelete, loanId }) => {
+const InstallmentRow = React.memo(({ installment, onDelete, loanId, index, totalCount }) => {
     return (
-        <div className="p-3 rounded-md border border-gray-200 bg-gray-50 flex justify-between items-center gap-2 text-sm">
-            {/* Left: Amount and Date */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:gap-4 flex-grow">
-                <span className="font-semibold text-gray-800">{formatCurrency(installment.amountPaid)}</span>
-                <span className="text-xs text-gray-500">{formatForInput(installment.paymentDate)}</span>
+        <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between gap-4 hover:shadow-sm transition-shadow">
+            {/* Left: Installment Info */}
+            <div className="flex items-center gap-3 flex-grow">
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-[#7E57C2]/10 flex items-center justify-center">
+                    <span className="text-xs font-semibold text-[#7E57C2]">{totalCount - index}</span>
+                </div>
+                <div className="flex flex-col flex-grow min-w-0">
+                    <span className="font-semibold text-gray-900">{formatCurrency(installment.amountPaid)}</span>
+                    <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5">
+                        <span>Date: <span className="font-medium text-gray-700">{formatForInput(installment.paymentDate)}</span></span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
+                            {installment.paymentMethodName || 'Cash'}
+                        </span>
+                    </div>
+                </div>
             </div>
             
-            {/* Middle: Method and Notes */}
-            <div className="flex-grow hidden md:block max-w-[40%]">
-                <span className="text-xs text-gray-600 truncate">{installment.paymentMethodName || 'Unknown Method'}</span>
-                {installment.notes && <span className="text-xs text-gray-500 ml-2 italic truncate">{installment.notes}</span>}
-            </div>
-            
-            {/* Right: Actions */}
-            <div className="flex space-x-2 flex-shrink-0">
+            {/* Right: Delete Button */}
+            <div className="flex-shrink-0">
                 <button
                     onClick={() => onDelete(loanId, installment.installmentId || installment.id)}
-                    className="p-1 rounded-full text-[#E53935] hover:bg-red-100 transition"
+                    className="p-1.5 rounded-full text-gray-400 hover:text-[#E53935] hover:bg-red-50 transition"
                     aria-label="Delete installment"
                     title="Delete installment"
                 >
@@ -98,39 +122,36 @@ const InstallmentRow = React.memo(({ installment, onDelete, loanId }) => {
 InstallmentRow.displayName = 'InstallmentRow';
 
 // --- LoanCard Component ---
-const LoanCard = React.memo(({ loan, onEdit, onDelete, onToggleExpand, isExpanded, onInstallmentDelete }) => {
-    const isDeletable = loan.installments.length === 0;
+const LoanCard = React.memo(({ loan, onEdit, onDelete, onToggleExpand, isExpanded, onInstallmentDelete, onStatusToggle }) => {
+    // Ensure installments is always an array (handle null, undefined, or non-array values)
+    const installments = Array.isArray(loan.installments) ? loan.installments : (loan.installments ? [loan.installments] : []);
+    const isDeletable = installments.length === 0;
     const isClosed = loan.status === 'CLOSED';
     const loanId = loan.loanId || loan.id;
 
     return (
-        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm hover:shadow-lg transition-transform transform hover:-translate-y-1">
-            <div 
-                className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 cursor-pointer"
-                onClick={() => onToggleExpand(loanId)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        onToggleExpand(loanId);
-                    }
-                }}
-                aria-expanded={isExpanded}
-            >
+        <div className="group bg-white border border-gray-100 rounded-xl shadow-sm hover:shadow-lg transition-transform transform hover:-translate-y-1">
+            {/* Main Loan Card */}
+            <div className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                
                 {/* Left Column: Main Info */}
                 <div className="flex flex-col gap-1 w-full md:w-5/12">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
                             loan.type === 'TAKEN' ? 'bg-red-50 text-[#E53935] border-[#E53935]' : 'bg-green-50 text-[#43A047] border-[#43A047]'
                         }`}>
                             {loan.type}
                         </span>
                         <span className="font-extrabold text-lg text-gray-900 truncate">{loan.personName}</span>
+                        {installments.length > 0 && (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                                {installments.length} {installments.length === 1 ? 'Installment' : 'Installments'}
+                            </span>
+                        )}
                     </div>
                     
                     <div className="flex flex-wrap gap-x-4 text-xs text-gray-500 mt-1">
-                        <span>Start Date: {formatForInput(loan.startDate)}</span>
+                        <span>Start Date: <span className="text-gray-700 font-medium">{formatForInput(loan.startDate)}</span></span>
                         {loan.dueDate && (
                             <span className="text-[#1E88E5] font-medium">
                                 Due Date: {formatForInput(loan.dueDate)}
@@ -143,85 +164,113 @@ const LoanCard = React.memo(({ loan, onEdit, onDelete, onToggleExpand, isExpande
                     )}
                 </div>
 
-                {/* Right Column: Amount, Status, Actions */}
-                <div className="flex items-center justify-between md:justify-end gap-6 w-full md:w-7/12">
-                    <div className="flex flex-col items-start md:items-end flex-grow">
-                        <span className="text-lg font-extrabold text-[#7E57C2]">{formatCurrency(loan.originalAmount)}</span>
-                        <span className="text-sm text-gray-500 mt-0.5">Remaining: 
+                {/* Center Column: Amount and Status */}
+                <div className="flex items-center justify-between md:justify-end gap-6 w-full md:w-4/12">
+                    <div className="flex flex-col items-start md:items-end">
+                        <span className="text-sm text-gray-500 uppercase">Original Amount</span>
+                        <span className="text-xl font-extrabold text-[#111827]">{formatCurrency(loan.originalAmount)}</span>
+                        <span className="text-xs text-gray-500 mt-0.5">Remaining: 
                             <span className={`font-semibold ml-1 ${loan.remainingAmount <= 0 ? 'text-[#43A047]' : 'text-[#E53935]'}`}>
                                 {formatCurrency(loan.remainingAmount)}
                             </span>
                         </span>
                     </div>
 
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${
-                        isClosed
-                            ? 'bg-gray-200 text-gray-700'
-                            : 'bg-[#43A047] text-white'
-                    }`}>
-                        {loan.status}
-                    </span>
-
-                    {/* Actions and Toggle */}
-                    <div className="flex space-x-2 items-center flex-shrink-0">
-                        {/* Edit Button */}
+                    {isClosed ? (
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                            'bg-gray-200 text-gray-700'
+                        }`}>
+                            {loan.status}
+                        </span>
+                    ) : (
                         <button
-                            onClick={(e) => { e.stopPropagation(); onEdit(loan); }}
-                            className="p-1.5 rounded-full text-gray-400 hover:text-[#7E57C2] hover:bg-purple-50 transition"
-                            aria-label="Edit Loan"
-                            title="Edit Loan"
+                            onClick={() => onStatusToggle(loanId, loan.status)}
+                            className="px-3 py-1 rounded-full text-xs font-semibold bg-[#43A047] text-white hover:bg-green-600 transition"
+                            aria-label="Close loan"
+                            title="Click to close loan"
                         >
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            {loan.status}
+                        </button>
+                    )}
+                </div>
+
+                {/* Right Column: Actions and Toggle */}
+                <div className="flex items-center justify-end gap-3 w-full md:w-3/12">
+                    {/* Dropdown Arrow for Installments - More Prominent */}
+                    {installments.length > 0 && (
+                        <button
+                            onClick={() => onToggleExpand(loanId)}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-all duration-200"
+                            aria-label={isExpanded ? "Collapse installments" : "Expand installments"}
+                            aria-expanded={isExpanded}
+                            aria-controls={`installments-list-${loanId}`}
+                        >
+                            <span className="text-xs text-gray-600">{installments.length}</span>
+                            <svg className={`w-5 h-5 transform transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                             </svg>
                         </button>
+                    )}
 
-                        {/* Delete Button */}
-                        <button
-                            onClick={(e) => { e.stopPropagation(); if (isDeletable) onDelete(loanId); }}
-                            disabled={!isDeletable}
-                            className={`p-1.5 rounded-full transition ${
-                                isDeletable 
-                                    ? 'text-[#E53935] hover:bg-red-100' 
-                                    : 'text-gray-300 cursor-not-allowed'
-                            }`}
-                            aria-label={isDeletable ? "Delete Loan" : "Delete disabled: remove installments first"}
-                            title={isDeletable ? "Delete Loan" : "Delete disabled: remove installments first"}
-                        >
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                        </button>
+                    <button
+                        onClick={() => onEdit(loan)}
+                        className="p-1.5 rounded-full text-gray-500 hover:text-[#2196F3] hover:bg-blue-50 transition opacity-100"
+                        aria-label="Edit Loan"
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                    </button>
 
-                        {/* Expand Toggle */}
-                        {loan.installments.length > 0 && (
-                            <div className="p-1.5 text-gray-600 hover:bg-gray-100 transition rounded-full">
-                                <svg className={`w-6 h-6 transform transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                </svg>
-                            </div>
-                        )}
-                    </div>
+                    <button
+                        onClick={() => onDelete(loanId)}
+                        className="p-1.5 rounded-full text-gray-500 hover:text-[#E53935] hover:bg-red-50 transition opacity-100"
+                        aria-label="Delete Loan"
+                        title={isDeletable ? "Delete Loan" : "Cannot delete: remove installments first"}
+                    >
+                        <svg className={`w-5 h-5 ${!isDeletable ? 'opacity-50' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    </button>
                 </div>
             </div>
 
             {/* Collapsible Installments List */}
-            {loan.installments.length > 0 && (
+            {installments.length > 0 && (
                 <div
-                    className={`overflow-hidden transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-[500px] opacity-100 pt-3 mt-3 border-t border-gray-100' : 'max-h-0 opacity-0'}`}
+                    id={`installments-list-${loanId}`}
+                    className={`overflow-hidden transition-all duration-300 ease-in-out border-t border-gray-100 ${
+                        isExpanded 
+                            ? 'max-h-[600px] opacity-100 pt-4 px-4 pb-4 bg-gray-50/50' 
+                            : 'max-h-0 opacity-0'
+                    }`}
                     aria-expanded={isExpanded}
                 >
-                    <h4 className="text-sm font-semibold text-gray-700 mb-2 ml-1">Installment Payments ({loan.installments.length})</h4>
-                    <div className="space-y-2 ml-4">
-                        {loan.installments.sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate)).map(installment => (
-                            <InstallmentRow
-                                key={installment.installmentId || installment.id || installment.tempId}
-                                loanId={loanId}
-                                installment={installment}
-                                onDelete={onInstallmentDelete}
-                            />
-                        ))}
-                    </div>
+                    {isExpanded && (
+                        <div className="space-y-1">
+                            <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                Installments ({installments.length})
+                            </h4>
+                            {/* Installments List */}
+                            <div className="space-y-2">
+                                {installments
+                                    .sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate))
+                                    .map((installment, index) => (
+                                        <InstallmentRow
+                                            key={installment.installmentId || installment.id || installment.tempId}
+                                            loanId={loanId}
+                                            installment={installment}
+                                            onDelete={onInstallmentDelete}
+                                            index={index}
+                                            totalCount={installments.length}
+                                        />
+                                    ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -385,11 +434,13 @@ const LoanModal = ({ isOpen, onClose, editingLoan, paymentMethods, onSave, onIns
         try {
             let result;
             if (isEditMode) {
-                // PUT request for editing - backend only allows updating certain fields
+                // PUT request for editing - backend allows updating certain fields including originalAmount and type
                 // Installments need to be added separately via POST /loans/:loanId/installments
                 const loanId = editingLoan.loanId || editingLoan.id;
                 const updatePayload = {
                     personName: loanPayload.personName,
+                    originalAmount: loanPayload.originalAmount,
+                    type: loanPayload.type,
                     notes: loanPayload.notes || null,
                     dueDate: loanPayload.dueDate || null,
                     interestRate: loanPayload.interestRate || null,
@@ -480,19 +531,10 @@ const LoanModal = ({ isOpen, onClose, editingLoan, paymentMethods, onSave, onIns
 
             onSave(result);
             onClose();
-            toast({
-                title: isEditMode ? 'Loan updated successfully' : 'Loan created successfully',
-                description: `Loan for ${result.personName} has been ${isEditMode ? 'updated' : 'created'}.`,
-            });
 
         } catch (error) {
             const errorMessage = getErrorMessage(error);
             setApiError(`Failed to save loan: ${errorMessage}`);
-            toast({
-                title: 'Error',
-                description: errorMessage,
-                variant: 'destructive',
-            });
         } finally {
             setIsSaving(false);
         }
@@ -570,12 +612,11 @@ const LoanModal = ({ isOpen, onClose, editingLoan, paymentMethods, onSave, onIns
                                             key={type}
                                             name="type"
                                             onClick={() => setLoanForm(prev => ({ ...prev, type }))}
-                                            disabled={isEditMode} 
                                             className={`flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition ${
                                                 loanForm.type === type 
                                                     ? 'bg-[#7E57C2] text-white shadow' 
                                                     : 'text-gray-700 hover:bg-gray-100'
-                                            } ${isEditMode ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                            }`}
                                             aria-pressed={loanForm.type === type}
                                         >
                                             {type}
@@ -604,7 +645,7 @@ const LoanModal = ({ isOpen, onClose, editingLoan, paymentMethods, onSave, onIns
                                 {formErrors.personName && <p id="personName-error" className="text-red-600 text-xs mt-1">{formErrors.personName}</p>}
                             </div>
 
-                            {/* Original Amount (Disabled on edit) */}
+                            {/* Original Amount */}
                             <div>
                                 <label htmlFor="originalAmount" className="block text-sm font-medium text-gray-700 mb-1">Original Amount (Rs) *</label>
                                 <input
@@ -615,8 +656,7 @@ const LoanModal = ({ isOpen, onClose, editingLoan, paymentMethods, onSave, onIns
                                     value={loanForm.originalAmount}
                                     onChange={handleLoanChange}
                                     placeholder="0.00"
-                                    disabled={isEditMode} 
-                                    className={`w-full border-b-2 py-2 px-1 bg-transparent outline-none transition focus:ring-1 focus:ring-[#7E57C2] focus:border-[#7E57C2] ${formErrors.originalAmount ? 'border-red-500' : 'border-gray-300'} ${isEditMode ? 'bg-gray-200 opacity-80 cursor-not-allowed' : ''}`}
+                                    className={`w-full border-b-2 py-2 px-1 bg-transparent outline-none transition focus:ring-1 focus:ring-[#7E57C2] focus:border-[#7E57C2] ${formErrors.originalAmount ? 'border-red-500' : 'border-gray-300'}`}
                                     step="0.01"
                                     required
                                     aria-invalid={!!formErrors.originalAmount}
@@ -810,12 +850,24 @@ const LoanModal = ({ isOpen, onClose, editingLoan, paymentMethods, onSave, onIns
 const LoansPage = () => {
     // --- State Management ---
     const [loans, setLoans] = useState([]);
+    
+    // Date filter state
+    const [dateFilter, setDateFilter] = useState(() => {
+        const saved = localStorage.getItem('loans_date_filter') || 'all';
+        return saved === 'custom' ? 'all' : saved;
+    });
+    const [customStartDate, setCustomStartDate] = useState('');
+    const [customEndDate, setCustomEndDate] = useState('');
+    const [showCustomDateRange, setShowCustomDateRange] = useState(false);
     const [paymentMethods, setPaymentMethods] = useState([]);
     const [loading, setLoading] = useState(true);
 
     const [modalOpen, setModalOpen] = useState(false);
     const [editingLoan, setEditingLoan] = useState(null);
     const [expandedLoanIds, setExpandedLoanIds] = useState(new Set());
+    const [toast, setToast] = useState(null); // { message: string, type: 'success'|'error' }
+    const [closeConfirm, setCloseConfirm] = useState(null); // { loanId: number, personName: string }
+    const [deleteConfirm, setDeleteConfirm] = useState(null); // { loanId: number, personName: string }
 
     // Utility: Calculate remaining amount and status
     const processedLoans = useMemo(() => {
@@ -827,7 +879,12 @@ const LoansPage = () => {
             };
 
             // Normalize installments (backend uses installmentId, paymentMethod object)
-            const normalizedInstallments = (normalizedLoan.installments || []).map(inst => {
+            // Ensure installments is always an array (handle null, undefined, or non-array values)
+            const installmentsArray = Array.isArray(normalizedLoan.installments) 
+                ? normalizedLoan.installments 
+                : (normalizedLoan.installments ? [normalizedLoan.installments] : []);
+            
+            const normalizedInstallments = installmentsArray.map(inst => {
                 const paymentMethodId = inst.paymentMethod?.methodId || inst.paymentMethod?.id || inst.paymentMethodId;
                 const paymentMethodName = inst.paymentMethod?.name || 
                     paymentMethods.find(pm => (pm.methodId || pm.id) === paymentMethodId)?.name || 
@@ -846,8 +903,9 @@ const LoansPage = () => {
                 ? Number(normalizedLoan.remainingAmount)
                 : normalizedLoan.originalAmount - normalizedInstallments.reduce((sum, inst) => sum + Number(inst.amountPaid || 0), 0);
             
-            // Use backend's status if available
-            const status = normalizedLoan.status || (remainingAmount <= 0 ? 'CLOSED' : 'ACTIVE');
+            // Use backend's status if available, otherwise determine based on remaining amount
+            // Keep loan active unless explicitly marked as closed
+            const status = normalizedLoan.status || 'ACTIVE';
 
             return {
                 ...normalizedLoan,
@@ -859,12 +917,12 @@ const LoansPage = () => {
     }, [loans, paymentMethods]);
 
     // --- Data Fetching ---
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (filter = null, startDate = null, endDate = null) => {
         setLoading(true);
         try {
             const [loanData, pmData] = await Promise.all([
-                loanApi.getAll(),
-                paymentMethodApi.getAll(),
+                loanApi.getAll(true, filter, startDate, endDate), // Include both active and closed loans
+                paymentMethodApi.getAll(), // Payment methods are cached
             ]);
 
             // Handle different response formats
@@ -875,22 +933,66 @@ const LoansPage = () => {
             setPaymentMethods(paymentMethodsArray);
 
         } catch (err) {
-            console.error('Initial data fetch failed:', err);
             setLoans([]);
             setPaymentMethods([]);
-            toast({
-                title: 'Error loading data',
-                description: getErrorMessage(err),
-                variant: 'destructive',
-            });
+            const errorMessage = getErrorMessage(err);
+            setToast({ message: `Failed to load loans: ${errorMessage}`, type: 'error' });
+            setTimeout(() => setToast(null), 3000);
         } finally {
             setLoading(false);
         }
     }, []);
 
     useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+        if (dateFilter !== 'custom') {
+            const filterValue = dateFilter === 'all' ? null : dateFilter;
+            // Explicitly pass null for startDate and endDate when using preset filters
+            fetchData(filterValue, null, null);
+        }
+    }, [fetchData, dateFilter]);
+
+    // Generic toast display handler
+    const showToast = useCallback((message, type = 'success') => {
+        setToast({ message, type });
+        setTimeout(() => setToast(null), 3000);
+    }, []);
+
+    // Handler to change date filter
+    const handleFilterChange = useCallback((filter) => {
+        setDateFilter(filter);
+        localStorage.setItem('loans_date_filter', filter);
+        setCustomStartDate('');
+        setCustomEndDate('');
+        setShowCustomDateRange(false);
+    }, []);
+
+    // Handler for custom date range
+    const handleCustomDateRange = useCallback(() => {
+        if (!customStartDate || !customEndDate) {
+            showToast('Please select both start and end dates.', 'error');
+            return;
+        }
+        
+        const start = new Date(customStartDate);
+        const end = new Date(customEndDate);
+        if (start > end) {
+            showToast('Start date cannot be after end date.', 'error');
+            return;
+        }
+        
+        setDateFilter('custom');
+        localStorage.setItem('loans_date_filter', 'custom');
+        fetchData(null, customStartDate, customEndDate);
+    }, [customStartDate, customEndDate, fetchData, showToast]);
+
+    // Handler to clear custom date range
+    const handleClearCustomDateRange = useCallback(() => {
+        setCustomStartDate('');
+        setCustomEndDate('');
+        setShowCustomDateRange(false);
+        setDateFilter('all');
+        localStorage.setItem('loans_date_filter', 'all');
+    }, []);
 
     // Toggle loan expansion
     const handleToggleExpand = useCallback((id) => {
@@ -909,49 +1011,129 @@ const LoansPage = () => {
     const handleLoanSave = useCallback(async (savedLoan) => {
         // Refetch all loans to get updated data
         await fetchData();
-    }, [fetchData]);
+        if (savedLoan && savedLoan.personName) {
+            const isEdit = editingLoan !== null;
+            showToast(`Loan for ${savedLoan.personName} has been ${isEdit ? 'updated' : 'created'} successfully.`, 'success');
+        } else {
+            showToast('Loan saved successfully.', 'success');
+        }
+        setEditingLoan(null);
+    }, [fetchData, editingLoan, showToast]);
 
-    // Delete a loan (only if no installments)
-    const handleDeleteLoan = useCallback(async (id) => {
-        const loanToDelete = processedLoans.find(l => l.id === id);
+    // Handle delete click - show confirmation modal
+    const handleDeleteClick = useCallback((loanId) => {
+        const loanToDelete = processedLoans.find(l => l.id === loanId);
         if (loanToDelete?.installments.length > 0) {
-            toast({
-                title: 'Cannot delete loan',
-                description: 'Remove all installments before deleting the loan.',
-                variant: 'destructive',
-            });
+            showToast('Remove all installments before deleting the loan.', 'error');
             return;
         }
 
-        if (!window.confirm('Are you sure you want to delete this loan? This action cannot be undone.')) {
-            return;
-        }
+        setDeleteConfirm({
+            loanId: loanId,
+            personName: loanToDelete?.personName || 'this loan'
+        });
+    }, [processedLoans, showToast]);
+
+    // Handle confirmed delete
+    const handleDeleteLoan = useCallback(async (loanId) => {
+        const originalLoans = loans;
+        setLoans(prev => prev.filter(l => (l.loanId || l.id) !== loanId));
+        setDeleteConfirm(null); // Close confirmation dialog
 
         try {
-            await loanApi.delete(id);
+            await loanApi.delete(loanId);
             await fetchData();
-            toast({
-                title: 'Loan deleted',
-                description: 'The loan has been successfully deleted.',
-            });
+            showToast('Loan deleted successfully.', 'success');
+        } catch (error) {
+            setLoans(originalLoans); // Rollback
+            const errorMessage = getErrorMessage(error);
+            showToast(`Failed to delete loan: ${errorMessage}`, 'error');
+        }
+    }, [loans, fetchData, showToast]);
+
+    // Cancel delete confirmation
+    const handleCancelDelete = useCallback(() => {
+        setDeleteConfirm(null);
+    }, []);
+    
+    // Delete an installment
+    const handleInstallmentDelete = useCallback(async (loanId, installmentId) => {
+        try {
+            await loanApi.deleteInstallment(loanId, installmentId);
+            await fetchData();
+            showToast('Installment deleted successfully.', 'success');
         } catch (error) {
             const errorMessage = getErrorMessage(error);
-            toast({
-                title: 'Error deleting loan',
-                description: errorMessage,
-                variant: 'destructive',
-            });
-            console.error('Delete failed:', error);
+            showToast(`Failed to delete installment: ${errorMessage}`, 'error');
         }
-    }, [processedLoans, fetchData]);
-    
-    // Delete an installment (Note: Backend doesn't support this directly)
-    const handleInstallmentDelete = useCallback(async (loanId, installmentId) => {
-        toast({
-            title: 'Installment deletion',
-            description: 'To remove an installment, please edit the loan and remove it from the installments list.',
-            variant: 'destructive',
+    }, [fetchData, showToast]);
+
+    // Show close confirmation dialog
+    const handleStatusToggle = useCallback((loanId, currentStatus) => {
+        // Only allow closing ACTIVE loans
+        if (currentStatus === 'CLOSED') {
+            return;
+        }
+
+        const loanToUpdate = processedLoans.find(l => (l.loanId || l.id) === loanId);
+        
+        if (!loanToUpdate) return;
+
+        // Show confirmation dialog
+        setCloseConfirm({
+            loanId: loanId,
+            personName: loanToUpdate.personName
         });
+    }, [processedLoans]);
+
+    // Handle confirmed loan closure
+    const handleCloseLoan = useCallback(async (loanId) => {
+        const loanToUpdate = processedLoans.find(l => (l.loanId || l.id) === loanId);
+        
+        if (!loanToUpdate) {
+            setCloseConfirm(null);
+            return;
+        }
+
+        const newStatus = 'CLOSED';
+
+        // Optimistically update UI
+        setLoans(prev => prev.map(l => {
+            const id = l.loanId || l.id;
+            if (id === loanId) {
+                return {
+                    ...l,
+                    status: newStatus,
+                    remainingAmount: 0
+                };
+            }
+            return l;
+        }));
+
+        setCloseConfirm(null); // Close confirmation dialog
+
+        try {
+            // Include personName to satisfy backend validation
+            await loanApi.update(loanId, { 
+                personName: loanToUpdate.personName,
+                status: newStatus 
+            });
+            await fetchData();
+            showToast('Loan closed successfully.', 'success');
+        } catch (error) {
+            // Rollback on failure
+            setLoans(prev => prev.map(l => {
+                const id = l.loanId || l.id;
+                return id === loanId ? loanToUpdate : l;
+            }));
+            const errorMessage = getErrorMessage(error);
+            showToast(`Failed to close loan: ${errorMessage}`, 'error');
+        }
+    }, [processedLoans, fetchData, showToast]);
+
+    // Cancel close confirmation
+    const handleCancelClose = useCallback(() => {
+        setCloseConfirm(null);
     }, []);
 
     // Sidebar state
@@ -1004,8 +1186,9 @@ const LoansPage = () => {
                             key={loanId}
                             loan={loan}
                             onEdit={l => { setEditingLoan(l); setModalOpen(true); }}
-                            onDelete={handleDeleteLoan}
+                            onDelete={handleDeleteClick}
                             onInstallmentDelete={handleInstallmentDelete}
+                            onStatusToggle={handleStatusToggle}
                             isExpanded={expandedLoanIds.has(loanId)}
                             onToggleExpand={handleToggleExpand}
                         />
@@ -1033,8 +1216,8 @@ const LoansPage = () => {
                         {/* Header and Add Button */}
                         <div className="flex items-center justify-between gap-4 mb-6">
                             <div>
-                                <h1 className="text-2xl md:text-3xl font-bold text-[#7E57C2]">Your Loans</h1>
-                                <p className="text-sm text-gray-500 mt-1">Track borrowed and given money, interest, and repayment progress.</p>
+                                <h1 className="text-3xl font-extrabold bg-gradient-to-r from-[#7E57C2] to-[#8E24AA] bg-clip-text text-transparent">Your Loans</h1>
+                                <p className="text-sm text-gray-500 mt-1">Track borrowed and given money, interest, and repayment progress</p>
                             </div>
                             
                             <button
@@ -1047,6 +1230,113 @@ const LoansPage = () => {
                                 </svg>
                                 Add Loan
                             </button>
+                        </div>
+
+                        {/* Date Filter Buttons */}
+                        <div className="mt-6 mb-4">
+                            <div className="flex flex-col gap-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-sm font-medium text-gray-700">Filter by:</span>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            onClick={() => handleFilterChange('all')}
+                                            className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                                dateFilter === 'all' && !showCustomDateRange
+                                                    ? 'bg-[#7E57C2] text-white shadow-md'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            All
+                                        </button>
+                                        <button
+                                            onClick={() => handleFilterChange('lastweek')}
+                                            className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                                dateFilter === 'lastweek'
+                                                    ? 'bg-[#7E57C2] text-white shadow-md'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            Last Week
+                                        </button>
+                                        <button
+                                            onClick={() => handleFilterChange('lastmonth')}
+                                            className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                                dateFilter === 'lastmonth'
+                                                    ? 'bg-[#7E57C2] text-white shadow-md'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            Last Month
+                                        </button>
+                                        <button
+                                            onClick={() => handleFilterChange('lastyear')}
+                                            className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                                dateFilter === 'lastyear'
+                                                    ? 'bg-[#7E57C2] text-white shadow-md'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            Last Year
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowCustomDateRange(!showCustomDateRange);
+                                                if (!showCustomDateRange) {
+                                                    setDateFilter('custom');
+                                                }
+                                            }}
+                                            className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                                showCustomDateRange || dateFilter === 'custom'
+                                                    ? 'bg-[#7E57C2] text-white shadow-md'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            Custom Range
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {/* Custom Date Range Picker */}
+                                {showCustomDateRange && (
+                                    <div className="flex flex-wrap items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <label htmlFor="loansStartDate" className="text-sm font-medium text-gray-700">From:</label>
+                                            <input
+                                                id="loansStartDate"
+                                                type="date"
+                                                value={customStartDate}
+                                                onChange={(e) => setCustomStartDate(e.target.value)}
+                                                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#7E57C2] focus:border-transparent"
+                                            />
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <label htmlFor="loansEndDate" className="text-sm font-medium text-gray-700">To:</label>
+                                            <input
+                                                id="loansEndDate"
+                                                type="date"
+                                                value={customEndDate}
+                                                onChange={(e) => setCustomEndDate(e.target.value)}
+                                                max={getTodayDate()}
+                                                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#7E57C2] focus:border-transparent"
+                                            />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={handleCustomDateRange}
+                                                className="px-4 py-2 bg-[#7E57C2] text-white rounded-md text-sm font-semibold hover:bg-[#6d47b3] transition"
+                                            >
+                                                Apply
+                                            </button>
+                                            <button
+                                                onClick={handleClearCustomDateRange}
+                                                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md text-sm font-semibold hover:bg-gray-300 transition"
+                                            >
+                                                Clear
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* Main Content */}
@@ -1062,6 +1352,97 @@ const LoansPage = () => {
                         onSave={handleLoanSave}
                         onInstallmentDelete={handleInstallmentDelete}
                     />
+
+                    {/* Close Loan Confirmation Modal */}
+                    {closeConfirm && (
+                        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                             role="dialog" aria-modal="true" aria-label="Confirm Close Loan"
+                             onClick={handleCancelClose}
+                        >
+                            <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                                 onClick={e => e.stopPropagation()}
+                            >
+                                <div className="flex items-center gap-3 mb-4">
+                                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center">
+                                        <svg className="w-6 h-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-lg font-semibold text-gray-900">Close Loan</h3>
+                                </div>
+                                
+                                <p className="text-gray-600 mb-6">
+                                    Are you sure you want to close the loan for <span className="font-semibold text-gray-900">"{closeConfirm.personName}"</span>? 
+                                    This will set the remaining amount to zero and mark the loan as closed. This action cannot be undone.
+                                </p>
+                                
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        onClick={handleCancelClose}
+                                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => handleCloseLoan(closeConfirm.loanId)}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-[#43A047] rounded-lg hover:bg-green-600 transition"
+                                    >
+                                        Close Loan
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Delete Confirmation Modal */}
+                    {deleteConfirm && (
+                        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                             role="dialog" aria-modal="true" aria-label="Confirm Delete"
+                             onClick={handleCancelDelete}
+                        >
+                            <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                                 onClick={e => e.stopPropagation()}
+                            >
+                                <div className="flex items-center gap-3 mb-4">
+                                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                                        <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-lg font-semibold text-gray-900">Delete Loan</h3>
+                                </div>
+                                
+                                <p className="text-gray-600 mb-6">
+                                    Are you sure you want to delete the loan for <span className="font-semibold text-gray-900">"{deleteConfirm.personName}"</span>? 
+                                    This action cannot be undone.
+                                </p>
+                                
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        onClick={handleCancelDelete}
+                                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteLoan(deleteConfirm.loanId)}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Floating Toast Notification */}
+                    {toast && (
+                        <div className={`fixed bottom-6 right-6 px-4 py-2 rounded-lg shadow-xl text-white transition-opacity duration-300 ${
+                            toast.type === 'success' ? 'bg-[#43A047]' : 'bg-[#E53935]'
+                        }`}>
+                            {toast.message}
+                        </div>
+                    )}
                 </div>
             </main>
         </div>

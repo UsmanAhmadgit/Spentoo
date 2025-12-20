@@ -179,8 +179,6 @@ const SummaryCards = ({ expenses, showSummary, setShowSummary, sidebarOpen }) =>
             
             // Check if date is valid
             if (isNaN(expenseDateObj.getTime())) {
-                // Skip invalid dates
-                console.warn('Invalid date for expense:', expense);
                 return;
             }
 
@@ -519,7 +517,7 @@ const AddEditExpenseModal = ({
                         dateStr = dateObj.toISOString().substring(0, 10);
                     }
                 } catch (e) {
-                    console.warn('Invalid date format:', expenseDate);
+                    // Invalid date format - skip
                 }
             }
             
@@ -640,7 +638,6 @@ const AddEditExpenseModal = ({
                         expensePayload.transactionDate = dateStr;
                     }
                 } catch (e) {
-                    console.warn('Error formatting date:', e);
                     // Fallback: use existing expense date
                     const existingDate = editingExpense.transactionDate || editingExpense.date;
                     if (existingDate) {
@@ -670,9 +667,6 @@ const AddEditExpenseModal = ({
             }
         }
 
-        // Debug: Log the payload being sent
-        console.log('Expense payload being sent:', JSON.stringify(expensePayload, null, 2));
-        
         try {
             let result;
             if (isEditMode) {
@@ -689,7 +683,6 @@ const AddEditExpenseModal = ({
             handleClose();
 
         } catch (error) {
-            console.error('Error saving expense:', error);
             // Better error message extraction
             let errorMessage = 'Error saving expense. Please try again.';
             if (error.response?.data) {
@@ -953,7 +946,7 @@ const ExpenseCardRow = ({ expense, onEdit, onDelete }) => {
                         </svg>
                     </button>
                     <button
-                        onClick={() => onDelete(expense.id || expense.expenseId)}
+                        onClick={() => onDelete(expense)}
                         className="p-1 rounded-full text-[#E53935] hover:bg-red-100 transition"
                         aria-label="Delete expense"
                     >
@@ -1026,7 +1019,7 @@ const ExpenseTable = ({ expenses, onEdit, onDelete }) => {
                                         </svg>
                                     </button>
                                     <button
-                                        onClick={() => onDelete(expense.id || expense.expenseId)}
+                                        onClick={() => onDelete(expense)}
                                         className="p-1 rounded-full text-[#E53935] hover:bg-red-100 transition"
                                         aria-label="Delete expense"
                                     >
@@ -1079,15 +1072,24 @@ const ExpensesPage = () => {
     const [isAddEditModalOpen, setIsAddEditModalOpen] = useState(false);
     const [editingExpense, setEditingExpense] = useState(null); // null for add mode, Expense object for edit mode
     const [lastActionToast, setLastActionToast] = useState(null);
+    const [deleteConfirm, setDeleteConfirm] = useState(null); // { expenseId: number, expenseDescription: string }
+    const [dateFilter, setDateFilter] = useState(() => {
+        const saved = localStorage.getItem('expense_date_filter') || 'all';
+        // Reset to 'all' if saved filter is 'custom' (since we don't persist custom dates)
+        return saved === 'custom' ? 'all' : saved;
+    });
+    const [customStartDate, setCustomStartDate] = useState('');
+    const [customEndDate, setCustomEndDate] = useState('');
+    const [showCustomDateRange, setShowCustomDateRange] = useState(false);
 
     // --- Data Fetching ---
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (filter = null, startDate = null, endDate = null) => {
         setLoading(true);
         // Error state setting removed as per user request
         try {
             // Fetch all data concurrently
             const [expenseData, categoryData, paymentMethodData] = await Promise.all([
-                expenseApi.getAll().then(data => {
+                expenseApi.getAll(filter, startDate, endDate).then(data => {
                     // Backend returns List<ExpenseDTO> which is an array
                     const expenses = Array.isArray(data) ? data : (data.expenses || []);
                     return { expenses };
@@ -1217,15 +1219,6 @@ const ExpensesPage = () => {
             setPaymentMethods(allPaymentMethods);
 
         } catch (err) {
-            // Data fetch failure: Log detailed error to console
-            console.error('Initial data fetch failed:', err);
-            console.error('Error details:', {
-                message: err.message,
-                response: err.response?.data,
-                status: err.response?.status,
-                url: err.config?.url
-            });
-            
             // Extract error message from response
             let errorMessage = 'Failed to load data. Please check your connection and try again.';
             if (err.response?.data) {
@@ -1240,12 +1233,10 @@ const ExpensesPage = () => {
                 errorMessage = err.message;
             }
             
-            // Ensure lists are empty or fallback to default state on failure
             setExpenses([]);
             setCategories([]);
             setPaymentMethods([]);
             
-            // Show error toast
             setLastActionToast({
                 message: `Failed to load data: ${errorMessage} (Status: ${err.response?.status || 'Unknown'})`,
                 type: 'error'
@@ -1256,8 +1247,57 @@ const ExpensesPage = () => {
     }, []);
 
     useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+        // Only fetch preset filters here (not custom date range, which is handled by Apply button)
+        if (dateFilter !== 'custom') {
+            const filterValue = dateFilter === 'all' ? null : dateFilter;
+            fetchData(filterValue);
+        }
+        // Custom date range is handled by handleCustomDateRange when Apply is clicked
+    }, [fetchData, dateFilter]);
+
+    // Handler to change date filter
+    const handleFilterChange = useCallback((filter) => {
+        setDateFilter(filter);
+        localStorage.setItem('expense_date_filter', filter);
+        // Clear custom date range when preset filter is selected
+        setCustomStartDate('');
+        setCustomEndDate('');
+        setShowCustomDateRange(false);
+    }, []);
+
+    // Handler for custom date range
+    const handleCustomDateRange = useCallback(() => {
+        if (!customStartDate || !customEndDate) {
+            setLastActionToast({ message: 'Please select both start and end dates.', type: 'error' });
+            setTimeout(() => setLastActionToast(null), 3000);
+            return;
+        }
+        
+        // Validate dates
+        const start = new Date(customStartDate);
+        const end = new Date(customEndDate);
+        if (start > end) {
+            setLastActionToast({ message: 'Start date cannot be after end date.', type: 'error' });
+            setTimeout(() => setLastActionToast(null), 3000);
+            return;
+        }
+        
+        // Set filter to custom and trigger fetch directly
+        setDateFilter('custom');
+        localStorage.setItem('expense_date_filter', 'custom');
+        // Trigger fetch with custom dates
+        fetchData(null, customStartDate, customEndDate);
+    }, [customStartDate, customEndDate, fetchData]);
+
+    // Handler to clear custom date range
+    const handleClearCustomDateRange = useCallback(() => {
+        setCustomStartDate('');
+        setCustomEndDate('');
+        setShowCustomDateRange(false);
+        setDateFilter('all');
+        localStorage.setItem('expense_date_filter', 'all');
+        // useEffect will handle the fetch when dateFilter changes
+    }, []);
 
     // --- CRUD Actions ---
 
@@ -1381,28 +1421,99 @@ const ExpensesPage = () => {
         setIsAddEditModalOpen(true);
     }, []);
 
-    // Handle immediate deletion of an expense
-    const handleDeleteExpense = useCallback(async (id) => {
-        // Optimistic UI update: Remove item immediately
+    // Handle delete click - show confirmation modal
+    const handleDeleteClick = useCallback((expense) => {
+        const description = expense.description || expense.categoryName || 'this expense';
+        const expenseId = expense.id || expense.expenseId;
+        // Allow 0 as valid ID, only reject null/undefined/empty string
+        if (expenseId === null || expenseId === undefined || expenseId === '') {
+            setLastActionToast({ message: 'Invalid expense ID. Cannot delete.', type: 'error' });
+            setTimeout(() => setLastActionToast(null), 3000);
+            return;
+        }
+        setDeleteConfirm({
+            expenseId: expenseId,
+            expenseDescription: description
+        });
+    }, []);
+
+    // Handle confirmed delete
+    const handleDeleteExpense = useCallback(async (expenseId) => {
+        // Check if expenseId is null or undefined
+        if (expenseId === null || expenseId === undefined || expenseId === '') {
+            setDeleteConfirm(null);
+            setLastActionToast({ message: 'Invalid expense ID. Cannot delete.', type: 'error' });
+            setTimeout(() => setLastActionToast(null), 3000);
+            return;
+        }
+
         const originalExpenses = expenses;
-        setExpenses(prev => prev.filter(e => e.id !== id));
-        setLastActionToast({ message: 'Deleting expense...', type: 'info' });
+        // Convert expenseId to number for consistent comparison
+        // Handle both string and number formats
+        let idToDelete;
+        try {
+            if (typeof expenseId === 'string') {
+                // Try parsing as integer (base 10), remove any whitespace first
+                const trimmed = expenseId.trim();
+                idToDelete = trimmed ? parseInt(trimmed, 10) : NaN;
+            } else if (typeof expenseId === 'number') {
+                idToDelete = expenseId;
+            } else {
+                // Try to convert to number as last resort
+                idToDelete = Number(expenseId);
+            }
+        } catch (e) {
+            console.error('Error converting expense ID:', e, 'expenseId:', expenseId);
+            setDeleteConfirm(null);
+            setLastActionToast({ message: 'Invalid expense ID format.', type: 'error' });
+            setTimeout(() => setLastActionToast(null), 3000);
+            return;
+        }
+        
+        // Check if conversion resulted in NaN or if it's not a finite positive number
+        if (isNaN(idToDelete) || !isFinite(idToDelete) || idToDelete < 1 || !Number.isInteger(idToDelete)) {
+            console.error('Invalid expense ID:', expenseId, 'Type:', typeof expenseId, 'converted to:', idToDelete);
+            setDeleteConfirm(null);
+            setLastActionToast({ message: 'Invalid expense ID format.', type: 'error' });
+            setTimeout(() => setLastActionToast(null), 3000);
+            return;
+        }
+
+        setExpenses(prev => prev.filter(e => {
+            const eId = Number(e.id || e.expenseId);
+            return isNaN(eId) || eId !== idToDelete;
+        }));
+        setDeleteConfirm(null); // Close confirmation dialog
 
         try {
-            await expenseApi.delete(id);
+            await expenseApi.delete(idToDelete);
             setLastActionToast({ message: 'Expense deleted successfully.', type: 'success' });
         } catch (error) {
-            // Revert on error
-            setExpenses(originalExpenses);
+            setExpenses(originalExpenses); // Rollback
+            console.error('Delete expense error:', error);
+            let errorMessage = 'Please try again.';
+            if (error.response?.data) {
+                if (typeof error.response.data === 'string') {
+                    errorMessage = error.response.data;
+                } else if (error.response.data.message) {
+                    errorMessage = error.response.data.message;
+                }
+            } else if (error.message) {
+                errorMessage = error.message;
+            }
             setLastActionToast({ 
-                message: `Error deleting expense: ${error.response?.data?.message || error.message || 'Please try again.'}`, 
+                message: `Failed to delete expense: ${errorMessage}`, 
                 type: 'error' 
             });
-            console.error('Delete failed:', error);
         } finally {
             setTimeout(() => setLastActionToast(null), 3000);
         }
     }, [expenses]);
+
+    // Cancel delete confirmation
+    const handleCancelDelete = useCallback(() => {
+        setDeleteConfirm(null);
+    }, []);
 
 
     // --- Render Logic ---
@@ -1438,7 +1549,7 @@ const ExpensesPage = () => {
                         key={expense.id}
                         expense={expense}
                         onEdit={handleEditExpense}
-                        onDelete={handleDeleteExpense}
+                        onDelete={handleDeleteClick}
                     />
                 ))}
             </div>
@@ -1449,7 +1560,7 @@ const ExpensesPage = () => {
             <ExpenseTable
                 expenses={expenses}
                 onEdit={handleEditExpense}
-                onDelete={handleDeleteExpense}
+                onDelete={handleDeleteClick}
             />
         );
     }
@@ -1504,6 +1615,120 @@ const ExpensesPage = () => {
                         />
                     </div>
 
+                    {/* Date Filter Buttons */}
+                    <div className="mt-6 mb-4">
+                        <div className="flex flex-col gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-medium text-gray-700">Filter by:</span>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => handleFilterChange('all')}
+                                        className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                            dateFilter === 'all' && !showCustomDateRange
+                                                ? 'bg-[#7E57C2] text-white shadow-md'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        }`}
+                                        aria-label="Show all expenses"
+                                    >
+                                        All
+                                    </button>
+                                    <button
+                                        onClick={() => handleFilterChange('lastweek')}
+                                        className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                            dateFilter === 'lastweek'
+                                                ? 'bg-[#7E57C2] text-white shadow-md'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        }`}
+                                        aria-label="Show last week expenses"
+                                    >
+                                        Last Week
+                                    </button>
+                                    <button
+                                        onClick={() => handleFilterChange('lastmonth')}
+                                        className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                            dateFilter === 'lastmonth'
+                                                ? 'bg-[#7E57C2] text-white shadow-md'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        }`}
+                                        aria-label="Show last month expenses"
+                                    >
+                                        Last Month
+                                    </button>
+                                    <button
+                                        onClick={() => handleFilterChange('lastyear')}
+                                        className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                            dateFilter === 'lastyear'
+                                                ? 'bg-[#7E57C2] text-white shadow-md'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        }`}
+                                        aria-label="Show last year expenses"
+                                    >
+                                        Last Year
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setShowCustomDateRange(!showCustomDateRange);
+                                            if (!showCustomDateRange) {
+                                                setDateFilter('custom');
+                                            }
+                                        }}
+                                        className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${
+                                            showCustomDateRange || dateFilter === 'custom'
+                                                ? 'bg-[#7E57C2] text-white shadow-md'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        }`}
+                                        aria-label="Custom date range"
+                                    >
+                                        Custom Range
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Custom Date Range Picker */}
+                            {showCustomDateRange && (
+                                <div className="flex flex-wrap items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <label htmlFor="startDate" className="text-sm font-medium text-gray-700">From:</label>
+                                        <input
+                                            id="startDate"
+                                            type="date"
+                                            value={customStartDate}
+                                            onChange={(e) => setCustomStartDate(e.target.value)}
+                                            className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#7E57C2] focus:border-transparent"
+                                        />
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <label htmlFor="endDate" className="text-sm font-medium text-gray-700">To:</label>
+                                        <input
+                                            id="endDate"
+                                            type="date"
+                                            value={customEndDate}
+                                            onChange={(e) => setCustomEndDate(e.target.value)}
+                                            max={getTodayDate()}
+                                            className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#7E57C2] focus:border-transparent"
+                                        />
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={handleCustomDateRange}
+                                            className="px-4 py-2 bg-[#7E57C2] text-white rounded-md text-sm font-semibold hover:bg-[#6d47b3] transition"
+                                            aria-label="Apply custom date range"
+                                        >
+                                            Apply
+                                        </button>
+                                        <button
+                                            onClick={handleClearCustomDateRange}
+                                            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md text-sm font-semibold hover:bg-gray-300 transition"
+                                            aria-label="Clear custom date range"
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
             {/* Main Content Area (List/Table) */}
             {content}
 
@@ -1517,6 +1742,47 @@ const ExpensesPage = () => {
                     }`}
                 >
                     {typeof lastActionToast === 'string' ? lastActionToast : lastActionToast.message}
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {deleteConfirm && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                     role="dialog" aria-modal="true" aria-label="Confirm Delete"
+                     onClick={handleCancelDelete}
+                >
+                    <div className="bg-white rounded-2xl w-full max-w-md p-6 z-50 shadow-2xl"
+                         onClick={e => e.stopPropagation()}
+                    >
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                                <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                            </div>
+                            <h3 className="text-lg font-semibold text-gray-900">Delete Expense</h3>
+                        </div>
+                        
+                        <p className="text-gray-600 mb-6">
+                            Are you sure you want to delete <span className="font-semibold text-gray-900">"{deleteConfirm.expenseDescription}"</span>? 
+                            This action cannot be undone.
+                        </p>
+                        
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={handleCancelDelete}
+                                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => handleDeleteExpense(deleteConfirm.expenseId)}
+                                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
