@@ -67,15 +67,21 @@ public class SecurityConfig {
                 .filter(s -> !s.isEmpty())
                 .collect(java.util.stream.Collectors.toList());
         } else {
-            // Default to localhost for development
+            // Default to localhost for development + Vercel production
             allowedOrigins = Arrays.asList(
+                "https://spentoo.vercel.app", // Production frontend
                 "http://localhost:3000", 
                 "http://localhost:3001", 
                 "http://localhost:3002"
             );
         }
         
-        configuration.setAllowedOrigins(allowedOrigins);
+        // Log allowed origins for debugging (remove in production if sensitive)
+        System.out.println("CORS Allowed Origins: " + allowedOrigins);
+        
+        // Use setAllowedOriginPatterns when allowCredentials is true (required in Spring Boot 2.4+)
+        // This allows multiple specific origins while maintaining credentials support
+        configuration.setAllowedOriginPatterns(allowedOrigins);
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
